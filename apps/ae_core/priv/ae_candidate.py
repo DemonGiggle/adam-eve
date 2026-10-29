@@ -264,6 +264,11 @@ def publish(root, executable, manifest, job):
         if target.exists():
             require((target / "manifest.json").read_bytes() == encoded and
                 hashlib.sha256((target / "seed").read_bytes()).hexdigest() == digest, "artifact_conflict")
+            # A prior publisher may have died immediately after rename, before
+            # syncing the parent directory. Re-establish durability before any
+            # caller records this already-present release as available.
+            sync_dir(target)
+            sync_dir(root / "artifacts")
             return
         staging = Path(tempfile.mkdtemp(prefix=".publishing-" + job["id"][:12] + "-", dir=root / "artifacts"))
         try:

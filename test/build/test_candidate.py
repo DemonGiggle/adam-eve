@@ -3,14 +3,17 @@ import copy
 import difflib
 import hashlib
 import json
+import multiprocessing
 import os
 from pathlib import Path
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
 import time
 import unittest
+from unittest import mock
 
 CHECKOUT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(CHECKOUT / "apps/ae_core/priv"))
@@ -119,6 +122,89 @@ class CandidateTests(unittest.TestCase):
         with self.assertRaisesRegex(candidate.BuildError, "disk_reserve_exhausted"):
             candidate.build(self.root, job, self.proposal, self.lease, self.config)
         self.assertEqual(list((self.root / "workspaces").iterdir()), [])
+
+    def test_publication_sigkill_never_exposes_partial_releases(self):
+        _, revision, tree = self.prepare()
+        original = (self.root / "artifacts" / self.base["digest"] / "seed").read_bytes()
+        for boundary in ("source-synced", "seed-written", "manifest-synced",
+                         "before-rename", "after-rename", "parent-synced"):
+            with self.subTest(boundary=boundary):
+                # Publication treats these as opaque bytes; no candidate code
+                # executes in this test. Runtime verification uses the real
+                # trusted artifact loader in a separate BEAM process.
+                executable = original + b"\n" + boundary.encode()
+                digest = hashlib.sha256(executable).hexdigest()
+                manifest = {**self.base, "digest": digest, "source_revision": revision,
+                    "source_tree": tree, "parent": self.base["digest"], "authoring": "llm",
+                    "producing_job": self.job["id"], "producing_attempt": 1, "evaluation": None}
+                target = self.root / "artifacts" / digest
+
+                def interrupted_publisher():
+                    sync_tree, sync_dir = candidate.sync_tree, candidate.sync_dir
+                    fsync, rename = os.fsync, os.rename
+
+                    def die():
+                        os.kill(os.getpid(), signal.SIGKILL)
+
+                    def tree_sync(path):
+                        sync_tree(path)
+                        if boundary == "source-synced":
+                            die()
+
+                    def file_sync(descriptor):
+                        path = os.readlink(f"/proc/self/fd/{descriptor}")
+                        if boundary == "seed-written" and "/.publishing-" in path and path.endswith("/seed"):
+                            die()
+                        fsync(descriptor)
+                        if boundary == "manifest-synced" and "/.publishing-" in path and path.endswith("/manifest.json"):
+                            die()
+
+                    def directory_sync(path):
+                        sync_dir(path)
+                        if boundary == "parent-synced" and path == self.root / "artifacts":
+                            die()
+
+                    def publish_rename(source, destination):
+                        if boundary == "before-rename":
+                            die()
+                        rename(source, destination)
+                        if boundary == "after-rename":
+                            die()
+
+                    candidate.sync_tree, candidate.sync_dir = tree_sync, directory_sync
+                    os.fsync, os.rename = file_sync, publish_rename
+                    candidate.publish(self.root, executable, manifest, self.job)
+
+                child = multiprocessing.get_context("fork").Process(target=interrupted_publisher)
+                child.start()
+                child.join(20)
+                if child.is_alive():
+                    child.kill()
+                    child.join(5)
+                    self.fail("interrupted publisher did not reach its boundary")
+                self.assertEqual(child.exitcode, -signal.SIGKILL)
+                visible = boundary in ("after-rename", "parent-synced")
+                self.assertEqual(target.exists(), visible)
+                verified = json.loads(subprocess.check_output(["escript",
+                    str(CHECKOUT / "test/build/publication_probe.escript"), str(self.root), digest],
+                    cwd=CHECKOUT, timeout=20))
+                self.assertEqual(verified, {"baseline_verified": True, "available": visible})
+                self.assertEqual((self.root / "artifacts" / self.base["digest"] / "seed").read_bytes(), original)
+                # A retained source ref alone never makes partial output usable.
+                self.assertEqual(candidate.git(self.root, "rev-parse", "refs/generations/" + digest).strip().decode(), revision)
+                if visible:
+                    self.assertEqual((target / "seed").read_bytes(), executable)
+                    self.assertEqual((target / "manifest.json").read_bytes(), candidate.canonical(manifest))
+                # Trusted recovery may verify/adopt exact output; this does not
+                # rerun a build, refund a reservation, evaluate, or promote it.
+                with mock.patch.object(candidate, "sync_dir", wraps=candidate.sync_dir) as synced:
+                    candidate.publish(self.root, executable, manifest, self.job)
+                self.assertIn(mock.call(self.root / "artifacts"), synced.call_args_list)
+                if visible:
+                    self.assertIn(mock.call(target), synced.call_args_list)
+                self.assertEqual((target / "seed").read_bytes(), executable)
+                with self.assertRaisesRegex(candidate.BuildError, "artifact_conflict"):
+                    candidate.publish(self.root, executable, {**manifest, "objective": "changed"}, self.job)
 
     @unittest.skipUnless(os.getenv("AE_TEST_CGROUP_ROOT"), "requires explicitly delegated cgroup v2 test root")
     def test_restricted_build_retains_exact_release_and_provenance(self):

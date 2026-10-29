@@ -70,6 +70,19 @@ described in [EVOLUTION.md](EVOLUTION.md). Complete explicit configuration and
 restricted execution are required to enable evolution.
 Missing isolation never falls back to the manual host compiler.
 
+Candidate publication holds the shared publication/backup lock, syncs the
+protected source ref and objects, writes and syncs executable/manifest contents
+in a hidden directory, then atomically renames it and syncs the artifact parent.
+An idempotent retry verifies exact bytes and re-syncs both the existing release
+and parent before returning; a publisher could have died just after rename.
+`test_publication_sigkill_never_exposes_partial_releases` kills a separate
+publisher at six boundaries from source sync through parent sync and uses the
+real Erlang artifact loader to verify that incomplete releases stay unavailable
+while the baseline remains intact. Exact publication can be retried without
+executing source. This is not automatic build recovery or approval: unknown
+execution reservations remain consumed, and a complete orphan is still
+unevaluated. Process-kill checks do not simulate physical disk/power loss.
+
 Configure the internal builder through `AE_BUILD_CONFIG_JSON`. Every field is
 required; invalid or missing configuration disables the builder. For example,
 the following are **local test budgets**, not production defaults:

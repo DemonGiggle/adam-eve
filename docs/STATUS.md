@@ -12,7 +12,7 @@ enabled only with complete limits and the restricted runtime backend.
 |---|---|---|
 | Phase 0: reliable seed | Implemented and integration-tested with a fixture provider: CLI, brokered LLM calls, durable conversations, retained source/releases, process restart. | A live model is not required by the automated suite; no live-model quality claim is established. |
 | Phase 1: dual-slot handoff | Implemented and integration-tested with manually authored generations: Adam → Eve → Adam, explicit approval, fencing, checkpoint/replay, observation, crash recovery, and rollback of acknowledged work. | The full handoff suite has not yet been repeated with both slots using the restricted runtime backend. |
-| Phase 2: controlled self-evolution | Partial. The evolution state machine and CLI connect authoring/repair, isolated builds/evaluation, job-bound manual approval, promotion/rollback, persistent disable, and local backup/restore. | Publication/retention recovery coverage, the restricted restart/failure matrix, and two successive live-LLM-authored promotions. |
+| Phase 2: controlled self-evolution | Partial. The evolution state machine and CLI connect authoring/repair, isolated builds/evaluation, job-bound manual approval, promotion/rollback, persistent disable, and local backup/restore. Publication has process-kill coverage. | Retention/cleanup recovery, the restricted restart/failure matrix, and two successive live-LLM-authored promotions. |
 | Phase 3: autonomous low-risk evolution | Not implemented. | Scheduled triggers and policy-authorized promotion are later work. |
 | Phase 4: advanced capabilities | Not implemented. | Explicitly outside MVP scope. |
 
@@ -68,7 +68,7 @@ the Phase 2 self-evolution demonstration.
 | 9. Controller survives agent failure | Bounded runtime recovery and degraded controller inspection are tested. |
 | 10. Disable evolution, keep serving | The restricted orchestrated test verifies enabled → disabled → restart → explicit re-enable, with ordinary service while disabled. Store tests verify disabled/cancelled approvals fail closed and an observing candidate closes admission until rollback. |
 | 11. Successive LLM-authored behavior | Not met. Manual cumulative lineage is tested; two live-LLM-authored behavioral changes and independent regression evidence remain pending. |
-| 12. Retained, verified code/releases | Exact executable retention, protected Git refs, integrity checks, and restart are tested. Coordinated retention/cleanup and interrupted-publication coverage remain unfinished. |
+| 12. Retained, verified code/releases | Exact executable retention, protected Git refs, integrity checks, restart, and six candidate-publication SIGKILL boundaries are tested. Coordinated retention/cleanup remains unfinished; physical storage-loss recovery requires environment evidence. |
 | 13. Bound approvals and durable budgets | Manual/generated bindings, reservations across restart, compiler repair without budget reset, durable promotion/rollback intents, and disable/cancellation guards are tested. Full orchestrator failure/restart coverage remains pending. |
 | 14. Preserve acknowledged work; recover backups | Manual/generated rollback preserves committed replies/results. Local consistent-backup/fenced-restore drills pass; environment-specific off-host recovery validation remains pending. |
 
