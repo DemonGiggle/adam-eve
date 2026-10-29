@@ -12,7 +12,9 @@ conversation and pending turns survive runtime replacement. Evolution is disable
 Phase 2 foundations now include a durable bounded authoring ledger, scoped
 paginated source access, a protected patch policy, and an optional restricted
 runtime backend. The authoring libraries are not yet wired to agent capabilities
-or an end-to-end builder. See [docs/EVOLUTION.md](docs/EVOLUTION.md) and
+or an end-to-end builder. Consistent online backups and fenced restoration are
+available through the operator commands in [docs/RECOVERY.md](docs/RECOVERY.md).
+See [docs/EVOLUTION.md](docs/EVOLUTION.md) and
 [docs/ISOLATION.md](docs/ISOLATION.md) for implemented behavior, required host
 configuration, and the remaining verification gaps.
 
@@ -186,12 +188,15 @@ Additional EUnit checks cover the evolution ledger, reservation/repair limits,
 proposal deduplication, protected patches, and bounded immutable source reads.
 The sandbox component checks run with `scripts/test`; full cgroup checks require
 an explicitly configured test subtree and report their skips when unavailable.
+Recovery checks snapshot a live WAL, verify retained source and releases, restore
+pending work behind closed admission, and replay committed replies after explicit
+reconciliation. They also restore a snapshot taken during deployment observation.
 
 This is the development seed milestone. The seed runs as the controller's OS
 user; separate processes and authenticated IPC do not sandbox hostile code.
 Fully verified restricted execution, portable checkpoint export, additional production
 effects, isolated candidate builds/evaluation, self-evolution,
-retention cleanup, and backup/restore drills remain in the later spec phases.
+retention cleanup, and off-host recovery validation remain in the later spec phases.
 The escript retains compiled code and dependencies; its recorded host ERTS must
 remain installed. An integrated isolated builder and self-contained runtime
 releases remain future work. No live-model quality claim is made by the fixture tests.

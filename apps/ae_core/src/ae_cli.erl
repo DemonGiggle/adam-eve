@@ -37,6 +37,8 @@ command(#{<<"op">> := <<"turn">>, <<"request_id">> := Request,
     end;
 command(#{<<"op">> := <<"status">>}) -> ae_router:status();
 command(#{<<"op">> := <<"restart">>}) -> result(ae_router:restart());
+command(#{<<"op">> := <<"restore_ready">>, <<"backup_id">> := Id, <<"origin_ref">> := Origin}) ->
+    result(ae_router:restore_ready(Id, Origin));
 command(#{<<"op">> := <<"stage">>, <<"artifact_digest">> := Digest}) ->
     case ae_deployment:stage(Digest) of {ok, Summary} -> Summary; Error -> result(Error) end;
 command(#{<<"op">> := <<"approve">>, <<"deployment_id">> := Id, <<"approval_binding">> := Binding}) ->

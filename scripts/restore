@@ -1,0 +1,18 @@
+#!/usr/bin/env python3
+"""Verify and restore a backup into a new, fenced data root. Never overwrites data."""
+import argparse
+import json
+import sys
+from ae_backup import restore
+
+parser = argparse.ArgumentParser(description=__doc__)
+parser.add_argument("--backup", required=True, help="complete content-addressed backup directory")
+parser.add_argument("--data-root", required=True, help="absent target under a private existing parent")
+parser.add_argument("--epoch-floor", required=True, type=int, help="at least the highest epoch issued before loss")
+parser.add_argument("--failure-time-ms", required=True, type=int, help="Unix milliseconds when the original service failed")
+args = parser.parse_args()
+try:
+    print(json.dumps(restore(args.backup, args.data_root, args.epoch_floor, args.failure_time_ms), sort_keys=True))
+except Exception as error:
+    print(f"Restore failed: {error}", file=sys.stderr)
+    sys.exit(1)

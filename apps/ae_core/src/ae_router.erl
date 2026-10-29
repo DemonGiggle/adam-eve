@@ -1,6 +1,6 @@
 -module(ae_router).
 -behaviour(gen_server).
--export([start_link/1, turn/3, restart/0, status/0, promote/2, rollback/2, check/1]).
+-export([start_link/1, turn/3, restart/0, status/0, promote/2, rollback/2, check/1, restore_ready/2]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
 
 start_link(Config) -> gen_server:start_link({local, ?MODULE}, ?MODULE, Config, []).
@@ -10,6 +10,7 @@ status() -> gen_server:call(?MODULE, status, 10000).
 promote(Id, Pid) -> gen_server:call(?MODULE, {promote, Id, Pid}, 400000).
 rollback(Id, Reason) -> gen_server:call(?MODULE, {rollback, Id, Reason}, 65000).
 check(Expected) -> gen_server:call(?MODULE, {check, Expected}, 10000).
+restore_ready(BackupId, Origin) -> gen_server:call(?MODULE, {restore_ready, BackupId, Origin}, 15000).
 
 init(#{root := Root} = Config) ->
     ok = ae_runtime_sup:stop_all(),
@@ -36,9 +37,12 @@ init(#{root := Root} = Config) ->
     end.
 
 handle_call({turn, Request, Session, Message}, From, State) ->
-    Validation = ae_protocol:validate(#{<<"protocol_version">> => 1, <<"type">> => <<"user_turn">>,
-        <<"request_id">> => Request, <<"session_id">> => Session, <<"message">> => Message,
-        <<"epoch">> => 1, <<"memory_cursor">> => 0}),
+    Validation = case ae_store:recovery() of
+        #{<<"pending">> := true} -> {error, restore_verification_required};
+        _ -> ae_protocol:validate(#{<<"protocol_version">> => 1, <<"type">> => <<"user_turn">>,
+            <<"request_id">> => Request, <<"session_id">> => Session, <<"message">> => Message,
+            <<"epoch">> => 1, <<"memory_cursor">> => 0})
+    end,
     case {Validation, maps:get(runtime, State), maps:get(inflight, State), maps:get(handoff, State)} of
         {ok, undefined, _, _} -> {reply, {error, runtime_unavailable}, State};
         {ok, _, _, Handoff} when Handoff =/= undefined -> {reply, {error, quiescing}, State};
@@ -50,13 +54,31 @@ handle_call({turn, Request, Session, Message}, From, State) ->
             end;
         {Error, _, _, _} -> {reply, Error, State}
     end;
+handle_call({restore_ready, BackupId, Origin}, _, State) ->
+    Reply = case maps:get(runtime, State) of
+        undefined -> {error, runtime_unavailable};
+        Runtime ->
+            case safe_health(Runtime) of
+                ok ->
+                    case ae_store:verify_recovery(ae_store:routing(), BackupId, Origin) of
+                        ok ->
+                            try ae_runtime_worker:activate(Runtime, ae_store:routing())
+                            catch exit:_ -> {error, runtime_unavailable} end;
+                        Error -> Error
+                    end;
+                Error -> Error
+            end
+    end,
+    {reply, Reply, State};
 handle_call(status, _, State) ->
     Health = case {maps:get(runtime, State), maps:get(inflight, State)} of
         {undefined, _} -> <<"degraded">>;
         {_, Busy} when Busy =/= undefined -> <<"busy">>;
         {Runtime, _} -> case safe_health(Runtime) of ok -> <<"ok">>; _ -> <<"unhealthy">> end
     end,
+    Recovery = case ae_store:recovery() of undefined -> null; Record -> Record end,
     Reply = #{<<"routing">> => ae_store:routing(), <<"os_pid">> => maps:get(os_pid, State, null),
+        <<"recovery">> => Recovery,
         <<"runtime_health">> => Health, <<"evolution_enabled">> => false,
         <<"runtime_isolation">> => atom_to_binary(maps:get(runtime_isolation, maps:get(config, State), development), utf8),
         <<"handoff_enabled">> => maps:get(handoff_limits, maps:get(config, State), undefined) =/= undefined,
@@ -140,7 +162,7 @@ boot_current(#{config := #{root := Root} = Config} = State) ->
     try
         Desc = ae_runtime_worker:descriptor(Runtime),
         {ok, New} = ae_store:activate_checkpoint(Route, Desc, maps:get(<<"checkpoint_id">>, CP)),
-        ok = ae_runtime_worker:activate(Runtime, New), bind_runtime(Runtime, State)
+        ok = enable_runtime(Runtime, New), bind_runtime(Runtime, State)
     catch C:R:S -> ae_runtime_sup:stop_runtime(Runtime), erlang:raise(C, R, S) end.
 
 finish_handoff(#{handoff := #{from := From, id := Id, candidate := Candidate, timer := Timer}} = State) ->
@@ -182,10 +204,16 @@ restore_previous(Id, Reason, State) ->
             ok = ae_runtime_worker:health(Runtime),
             Desc = ae_runtime_worker:descriptor(Runtime),
             {ok, Route} = ae_store:rollback(Id, Closed, Desc, maps:get(<<"checkpoint_id">>, CP), Reason),
-            ok = ae_runtime_worker:activate(Runtime, Route),
+            ok = enable_runtime(Runtime, Route),
             {{ok, Route}, bind_runtime(Runtime, Stopped)}
         catch C:R:S -> ae_runtime_sup:stop_runtime(Runtime), erlang:raise(C, R, S) end
     catch _:_ -> {{error, rollback_failed}, Stopped} end.
+
+enable_runtime(Runtime, Route) ->
+    case ae_store:recovery() of
+        #{<<"pending">> := true} -> ok; % Restored, health-checked standby; no production lease yet.
+        _ -> ae_runtime_worker:activate(Runtime, Route)
+    end.
 
 bind_runtime(Runtime, State) ->
     State#{runtime := Runtime, monitor := monitor(process, Runtime), os_pid => ae_runtime_worker:os_pid(Runtime)}.

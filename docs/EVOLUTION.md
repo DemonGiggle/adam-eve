@@ -4,9 +4,10 @@ The durable authoring ledger, source reader, and patch policy are implemented.
 They are trusted controller libraries, not yet exposed as agent capabilities or
 CLI evolution commands. `evolution_enabled` remains false. The orchestrating
 `ae_evolution` state machine, `seed_evolver`, broker integration, isolated builder,
-independent scorecard, publication/retention recovery, and backup drill remain
+independent scorecard, and publication/retention recovery remain
 required before the Phase 2 exit criterion can be claimed.
 The fixed reproducible seed recipe is available separately; see [BUILD.md](BUILD.md).
+Operator backup/restore and its local recovery drill are in [RECOVERY.md](RECOVERY.md).
 
 ## Ledger and budgets
 

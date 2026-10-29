@@ -1,0 +1,17 @@
+#!/usr/bin/env python3
+"""Take a consistent online backup of retained code and authoritative state."""
+import argparse
+import json
+import sys
+from ae_backup import backup, policy_record
+
+parser = argparse.ArgumentParser(description=__doc__)
+parser.add_argument("--data-root", required=True)
+parser.add_argument("--backup-root", required=True)
+parser.add_argument("--policy", required=True, help="environment backup policy JSON")
+args = parser.parse_args()
+try:
+    print(json.dumps(backup(args.data_root, args.backup_root, policy_record(args.policy)), sort_keys=True))
+except Exception as error:
+    print(f"Backup failed: {error}", file=sys.stderr)
+    sys.exit(1)
