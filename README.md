@@ -2,6 +2,7 @@
 
 An Erlang/OTP agent with a trusted controller and replaceable Adam/Eve runtimes.
 The architecture and planned milestones are in [docs/SPEC.md](docs/SPEC.md).
+The current milestone and acceptance gaps are tracked in [docs/STATUS.md](docs/STATUS.md).
 
 The development implementation now supports Phase 1: a trusted OTP controller
 serves isolated Adam/Eve BEAM processes, stages manually built candidates, and
@@ -196,11 +197,12 @@ Recovery checks snapshot a live WAL, verify retained source and releases, restor
 pending work behind closed admission, and replay committed replies after explicit
 reconciliation. They also restore a snapshot taken during deployment observation.
 
-This is the development seed milestone. The seed runs as the controller's OS
-user; separate processes and authenticated IPC do not sandbox hostile code.
-Fully verified restricted execution, portable checkpoint export, additional production
-effects, isolated candidate builds/evaluation, self-evolution,
-retention cleanup, and off-host recovery validation remain in the later spec phases.
-The escript retains compiled code and dependencies; its recorded host ERTS must
-remain installed. An integrated isolated builder and self-contained runtime
-releases remain future work. No live-model quality claim is made by the fixture tests.
+The default development backend runs trusted manual seeds as the controller's OS
+user. Generated candidates require the restricted Bubblewrap/cgroup backend;
+the supervised builder uses that backend and retains releases for evaluation.
+Restricted build and runtime crash-recovery checks have passed in a disposable
+Linux VM with cgroup delegation. Full restricted Adam/Eve handoff, independent
+evaluation, the evolution orchestrator, retention cleanup, and off-host recovery
+validation remain unfinished. The escript retains compiled code and dependencies;
+its recorded host ERTS must remain installed. No live-model quality claim is made
+by the fixture tests.
