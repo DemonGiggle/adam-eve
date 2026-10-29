@@ -1,10 +1,11 @@
 -module(ae_deployment).
 -behaviour(gen_statem).
--export([start_link/1, stage/1, approve/2, reject/1]).
+-export([start_link/1, stage/1, stage_evolution/1, approve/2, reject/1]).
 -export([init/1, callback_mode/0, handle_event/4, terminate/3]).
 
 start_link(Config) -> gen_statem:start_link({local, ?MODULE}, ?MODULE, Config, []).
-stage(Digest) -> gen_statem:call(?MODULE, {stage, Digest}, 65000).
+stage(Digest) -> gen_statem:call(?MODULE, {stage, {manual, Digest}}, 80000).
+stage_evolution(Id) -> gen_statem:call(?MODULE, {stage, {evolution, Id}}, 80000).
 approve(Id, Binding) -> gen_statem:call(?MODULE, {approve, Id, Binding}, 410000).
 reject(Id) -> gen_statem:call(?MODULE, {reject, Id}, 10000).
 callback_mode() -> handle_event_function.
@@ -19,11 +20,11 @@ init(Config) ->
             {ok, idle, Data}
     end.
 
-handle_event({call, From}, {stage, Digest}, idle, #{config := Config} = Data) ->
+handle_event({call, From}, {stage, Request}, idle, #{config := Config} = Data) ->
     case maps:get(handoff_limits, Config, undefined) of
         undefined -> {keep_state_and_data, [{reply, From, {error, handoff_not_configured}}]};
         Limits ->
-            case stage_candidate(Digest, Limits, Data) of
+            case stage_candidate(Request, Limits, Data) of
                 {ok, Job, Next} ->
                     {next_state, awaiting_approval, Next, [{reply, From, {ok, summary(Job, Next)}} | poll(Next)]};
                 Error -> {keep_state_and_data, [{reply, From, Error}]}
@@ -65,19 +66,9 @@ handle_event(state_timeout, poll, awaiting_approval, Data) ->
     end;
 handle_event(state_timeout, poll, observing, Data) ->
     Job = ae_store:deployment(maps:get(job, Data)),
-    Expected = maps:get(<<"promoted_route">>, Job),
-    case ae_router:check(Expected) of
-        ok ->
-            case erlang:system_time(millisecond) >= maps:get(<<"observe_until">>, Job) of
-                true ->
-                    case ae_store:complete(maps:get(job, Data), Expected) of
-                        ok -> {next_state, idle, release(Data, false)};
-                        _ -> rollback_result(Data, <<"observation_commit_failed">>)
-                    end;
-                false -> {keep_state_and_data, poll(Data)}
-            end;
-        busy -> {keep_state_and_data, poll(Data)};
-        _ -> rollback_result(Data, <<"failed_health_gate">>)
+    case erlang:system_time(millisecond) < maps:get(<<"evolution_deadline">>, Job, (1 bsl 63) - 1) of
+        false -> rollback_result(Data, <<"evolution_deadline">>);
+        true -> observe(Job, Data)
     end;
 handle_event(cast, {runtime_failed, Id}, observing, #{job := Id} = Data) ->
     rollback_result(Data, <<"candidate_crashed">>);
@@ -91,15 +82,40 @@ handle_event(info, {'DOWN', Ref, process, _, _}, observing, #{monitor := Ref} = 
     rollback_result(Data, <<"candidate_crashed">>);
 handle_event(_, _, _, _) -> keep_state_and_data.
 
+observe(Job, Data) ->
+    Expected = maps:get(<<"promoted_route">>, Job),
+    case ae_router:check(Expected) of
+        ok ->
+            case erlang:system_time(millisecond) >= maps:get(<<"observe_until">>, Job) of
+                true ->
+                    case ae_store:complete(maps:get(job, Data), Expected) of
+                        ok -> {next_state, idle, release(Data, false)};
+                        _ -> rollback_result(Data, <<"observation_commit_failed">>)
+                    end;
+                false -> {keep_state_and_data, poll(Data)}
+            end;
+        busy -> {keep_state_and_data, poll(Data)};
+        _ -> rollback_result(Data, <<"failed_health_gate">>)
+    end.
+
 terminate(_, awaiting_approval, Data) -> release(Data, true), ok;
 terminate(_, _, Data) -> release(Data, false), ok.
 
-stage_candidate(Digest, Limits, #{config := #{root := Root} = Config} = Data) ->
+stage_candidate(Request, Limits, #{config := #{root := Root} = Config} = Data) ->
     try
+        Digest = case Request of
+            {manual, Value} -> Value;
+            {evolution, EvolutionId} ->
+                bubblewrap = maps:get(runtime_isolation, Config, development),
+                Evolution = ae_store:evolution({get, EvolutionId}),
+                maps:get(<<"digest">>, maps:get(<<"built_artifact">>, Evolution)) end,
         Manifest = ae_artifacts:load(Root, Digest),
         Base = ae_store:routing(),
         ok = ae_artifacts:verify_parent(Root, Manifest, maps:get(<<"artifact">>, Base)),
-        case ae_store:new_deployment(Base, Manifest, Limits) of
+        Created = case Request of
+            {manual, _} -> ae_store:new_deployment(Base, Manifest, Limits);
+            {evolution, EId} -> ae_store:new_evolution_deployment(Base, EId, Manifest, Limits) end,
+        case Created of
             {ok, Job} ->
                 Id = maps:get(<<"id">>, Job),
                 Spec = #{<<"slot">> => maps:get(<<"target_slot">>, Job), <<"artifact">> => Manifest},
@@ -108,9 +124,12 @@ stage_candidate(Digest, Limits, #{config := #{root := Root} = Config} = Data) ->
                     try
                         ok = ae_runtime_worker:health(Candidate),
                         {ok, Reply} = ae_runtime_worker:simulate(Candidate),
-                        Evaluation = #{<<"protocol_v1">> => true, <<"schema_v1">> => true,
+                        Checks = #{<<"protocol_v1">> => true, <<"schema_v1">> => true,
                             <<"synthetic_turn">> => true, <<"production_tools">> => false,
                             <<"reply_digest">> => ae_policy:digest(Reply)},
+                        Evaluation = case maps:find(<<"independent_evaluation">>, Job) of
+                            {ok, Score} -> #{<<"staging">> => Checks, <<"independent">> => Score};
+                            error -> Checks end,
                         {ok, Staged} = ae_store:staged(Id, ae_runtime_worker:descriptor(Candidate), Evaluation),
                         OsPid = ae_runtime_worker:os_pid(Candidate),
                         {ok, Staged, Data#{candidate := Candidate, monitor := monitor(process, Candidate),
@@ -122,12 +141,18 @@ stage_candidate(Digest, Limits, #{config := #{root := Root} = Config} = Data) ->
     catch _:_ -> {error, invalid_artifact} end.
 
 summary(Job, #{candidate_os_pid := OsPid}) ->
+    maps:merge(maps:with([<<"evolution_job">>], Job),
     #{<<"deployment_id">> => maps:get(<<"id">>, Job), <<"approval_binding">> => ae_policy:binding(Job),
       <<"artifact">> => maps:get(<<"candidate">>, Job), <<"baseline">> => maps:get(<<"baseline">>, Job),
       <<"evaluation">> => maps:get(<<"evaluation">>, Job), <<"expires_at">> => maps:get(<<"expires_at">>, Job),
-      <<"standby_os_pid">> => OsPid}.
-poll(#{config := #{handoff_limits := Limits}}) ->
-    [{state_timeout, maps:get(<<"health_interval_ms">>, Limits), poll}].
+      <<"standby_os_pid">> => OsPid}).
+poll(#{config := #{handoff_limits := Limits}, job := Id}) ->
+    Job = ae_store:deployment(Id),
+    Deadline = case maps:get(<<"status">>, Job) of
+        <<"observing">> -> maps:get(<<"evolution_deadline">>, Job, (1 bsl 63) - 1);
+        _ -> maps:get(<<"expires_at">>, Job) end,
+    Wait = max(1, min(maps:get(<<"health_interval_ms">>, Limits), Deadline - erlang:system_time(millisecond))),
+    [{state_timeout, Wait, poll}].
 safe_health(Pid) -> try ae_runtime_worker:health(Pid) catch exit:_ -> {error, unhealthy} end.
 rollback_result(Data, Reason) ->
     {State, Next} = rollback(Data, Reason), {next_state, State, Next}.

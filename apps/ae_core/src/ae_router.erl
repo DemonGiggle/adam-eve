@@ -64,7 +64,7 @@ handle_call({author, Id}, From, State) ->
             case safe_auth(Runtime) of
                 {ok, Auth} ->
                     case ae_store:evolution({authorize, Auth, Id}) of
-                        {ok, Job} ->
+                        {ok, #{<<"status">> := <<"proposing">>} = Job} ->
                             Parent = self(), Ref = make_ref(),
                             Worker = spawn(fun() ->
                                 Reply = try ae_runtime_worker:author(Runtime, Job)
@@ -73,6 +73,7 @@ handle_call({author, Id}, From, State) ->
                             end),
                             {noreply, State#{inflight := #{ref => Ref, worker => Worker, from => From,
                                                            request => Id, auth => Auth}}};
+                        {ok, _} -> {reply, {error, invalid_job_state}, State};
                         Error -> {reply, Error, State}
                     end;
                 Error -> {reply, Error, State}

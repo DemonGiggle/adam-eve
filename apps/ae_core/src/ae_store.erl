@@ -5,7 +5,7 @@
          reserve_tool/3, reserve_tool/4, finish_tool/4, retry_turn/1, cancel_turn/1, events/0]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
 -export([register_artifact/1, checkpoint/1, get_checkpoint/1, quiesce/2,
-         new_deployment/3, staged/3, approve/2, reject/2, deployment/1,
+         new_deployment/3, new_evolution_deployment/4, staged/3, approve/2, reject/2, deployment/1,
          active_deployment/0, promote/4, rollback/5, complete/2, recover_handoff/0,
          activate_checkpoint/3, runtime_failed/2, evolution/1, recovery/0, verify_recovery/3]).
 
@@ -29,6 +29,7 @@ checkpoint(Expected) -> call({checkpoint, Expected}).
 get_checkpoint(Id) -> call({get_checkpoint, Id}).
 quiesce(Expected, Job) -> call({quiesce, Expected, Job}).
 new_deployment(Expected, Candidate, Limits) -> call({new_deployment, Expected, Candidate, Limits}).
+new_evolution_deployment(Expected, Id, Candidate, Limits) -> call({new_evolution_deployment, Expected, Id, Candidate, Limits}).
 staged(Id, Descriptor, Evaluation) -> call({staged, Id, Descriptor, Evaluation}).
 approve(Id, Binding) -> call({approve, Id, Binding}).
 reject(Id, Reason) -> call({reject, Id, Reason}).
@@ -259,16 +260,47 @@ dispatch({new_deployment, Expected, Candidate, Limits}, Db) ->
         <<"limits">> => Limits, <<"created_at">> => now_ms(),
         <<"expires_at">> => now_ms() + maps:get(<<"approval_ttl_ms">>, Limits)},
     save_job(Db, Job), event(Db, <<"deployment_started">>, Job), {ok, Job};
+dispatch({new_evolution_deployment, Expected, EvolutionId, Candidate, Limits}, Db) ->
+    require_baseline(Db, Expected), require_open(Db),
+    require(active_job(Db) =:= undefined, deployment_in_progress),
+    {ok, Evolution, Evaluation} = evolution_result(ae_evolution_store:dispatch(Db, {for_deployment, EvolutionId, Expected})),
+    require(Candidate =:= maps:get(<<"built_artifact">>, Evolution), candidate_changed),
+    require(maps:get(<<"authoring">>, Candidate) =:= <<"llm">>, invalid_candidate),
+    Keys = [<<"approval_ttl_ms">>, <<"observe_ms">>, <<"health_interval_ms">>, <<"quiesce_ms">>],
+    require(is_map(Limits) andalso lists:sort(maps:keys(Limits)) =:= lists:sort(Keys) andalso
+        lists:all(fun(V) -> is_integer(V) andalso V > 0 andalso V =< 300000 end, maps:values(Limits)), handoff_not_configured),
+    require(now_ms() + maps:get(<<"observe_ms">>, Limits) < maps:get(<<"deadline">>, Evolution), job_budget_exhausted),
+    ok = register_manifest(Db, Candidate),
+    Id = ae_policy:sha256(crypto:strong_rand_bytes(32)),
+    Job = #{<<"id">> => Id, <<"status">> => <<"staging">>, <<"baseline">> => Expected,
+        <<"candidate">> => Candidate, <<"target_slot">> => maps:get(<<"target_slot">>, Evolution),
+        <<"evolution_job">> => EvolutionId, <<"independent_evaluation">> => Evaluation,
+        <<"evolution_deadline">> => maps:get(<<"deadline">>, Evolution),
+        <<"limits">> => Limits, <<"created_at">> => now_ms(),
+        <<"expires_at">> => min(now_ms() + maps:get(<<"approval_ttl_ms">>, Limits), maps:get(<<"deadline">>, Evolution))},
+    save_job(Db, Job), event(Db, <<"deployment_started">>, Job), {ok, Job};
 dispatch({staged, Id, Descriptor, Evaluation}, Db) ->
     Job = require_job(Db, Id, [<<"staging">>]),
     require_baseline(Db, maps:get(<<"baseline">>, Job)), require_unexpired(Job),
     require_descriptor(Job, Descriptor, candidate),
+    case maps:is_key(<<"evolution_job">>, Job) of
+        true ->
+            require(maps:get(<<"independent">>, Evaluation, null) =:= maps:get(<<"independent_evaluation">>, Job), evaluation_mismatch),
+            Checks = maps:get(<<"staging">>, Evaluation, #{}),
+            require(lists:sort(maps:keys(Evaluation)) =:= [<<"independent">>, <<"staging">>] andalso
+                lists:sort(maps:keys(Checks)) =:= [<<"production_tools">>, <<"protocol_v1">>, <<"reply_digest">>, <<"schema_v1">>, <<"synthetic_turn">>] andalso
+                maps:get(<<"production_tools">>, Checks) =:= false andalso
+                lists:all(fun(K) -> maps:get(K, Checks) =:= true end, [<<"protocol_v1">>, <<"schema_v1">>, <<"synthetic_turn">>]) andalso
+                is_binary(maps:get(<<"reply_digest">>, Checks)) andalso
+                re:run(maps:get(<<"reply_digest">>, Checks), <<"^[0-9a-f]{64}$">>, [{capture, none}]) =:= match, invalid_staging_evaluation);
+        false -> ok end,
     New = Job#{<<"status">> := <<"awaiting_approval">>, <<"runtime">> => Descriptor,
                <<"evaluation">> => Evaluation},
     save_job(Db, New), event(Db, <<"candidate_staged">>, New), {ok, New};
 dispatch({approve, Id, Binding}, Db) ->
     Job = require_job(Db, Id, [<<"awaiting_approval">>]),
     require_baseline(Db, maps:get(<<"baseline">>, Job)), require_unexpired(Job),
+    require_evolution(Db, Job),
     require(Binding =:= ae_policy:binding(Job), approval_mismatch),
     New = Job#{<<"status">> := <<"approved">>, <<"approval_binding">> => Binding},
     save_job(Db, New), event(Db, <<"deployment_approved">>, #{<<"id">> => Id, <<"binding">> => Binding}),
@@ -279,6 +311,7 @@ dispatch({quiesce, Expected, Id}, Db) ->
         null -> ok;
         _ ->
             Job = require_job(Db, Id, [<<"approved">>]), require_unexpired(Job),
+            require_evolution(Db, Job),
             require(ae_policy:same_baseline(Expected, maps:get(<<"baseline">>, Job)), stale_routing),
             save_job(Db, Job#{<<"status">> := <<"quiescing">>})
     end,
@@ -286,6 +319,9 @@ dispatch({quiesce, Expected, Id}, Db) ->
     save_route(Db, Closed), event(Db, <<"admission_closed">>, #{<<"deployment_id">> => Id}), {ok, Closed};
 dispatch({promote, Id, Expected, Descriptor, Checkpoint}, Db) ->
     Job = require_job(Db, Id, [<<"quiescing">>]), require_unexpired(Job),
+    require_evolution(Db, Job),
+    require(now_ms() + maps:get(<<"observe_ms">>, maps:get(<<"limits">>, Job)) =<
+        maps:get(<<"evolution_deadline">>, Job, (1 bsl 63) - 1), job_budget_exhausted),
     require_baseline(Db, Expected),
     require(ae_policy:same_baseline(Expected, maps:get(<<"baseline">>, Job)), stale_routing),
     require(maps:get(<<"admission">>, route(Db), <<"open">>) =:= <<"closed">>, not_quiesced),
@@ -302,11 +338,12 @@ dispatch({rollback, Id, Expected, Descriptor, Checkpoint, Reason}, Db) ->
     require(ae_policy:same_baseline(Expected, maps:get(<<"promoted_route">>, Job)), stale_routing),
     require_descriptor(Job, Descriptor, predecessor), require_checkpoint(Db, Checkpoint),
     New = new_route(Db, Expected, Descriptor, Checkpoint),
-    save_route(Db, New), save_job(Db, Job#{<<"status">> := <<"rolled_back">>, <<"reason">> => Reason}),
+    save_route(Db, New), save_job(Db, Job#{<<"status">> := <<"rolled_back">>, <<"reason">> => Reason, <<"rollback_route">> => New}),
     event(Db, <<"routing_rolled_back">>, #{<<"deployment_id">> => Id, <<"routing">> => New,
                                           <<"reason">> => Reason}), {ok, New};
 dispatch({complete, Id, Expected}, Db) ->
     Job = require_job(Db, Id, [<<"observing">>]), require_baseline(Db, Expected),
+    require_evolution(Db, Job),
     require(ae_policy:same_baseline(Expected, maps:get(<<"promoted_route">>, Job)), stale_routing),
     require(now_ms() >= maps:get(<<"observe_until">>, Job), observation_incomplete),
     save_job(Db, Job#{<<"status">> := <<"completed">>}),
@@ -357,7 +394,16 @@ initialize_registry(Db, Route) ->
     _ = sql(Db, "INSERT OR IGNORE INTO control VALUES('last_known_good',?)", [jsx:encode(Route)]), ok.
 save_route(Db, Route) -> sql(Db, "UPDATE routing SET data=? WHERE id=1", [jsx:encode(Route)]).
 save_job(Db, #{<<"id">> := Id, <<"status">> := Status} = Job) ->
-    sql(Db, "INSERT OR REPLACE INTO deployments VALUES(?,?,?)", [Id, Status, jsx:encode(Job)]).
+    sql(Db, "INSERT OR REPLACE INTO deployments VALUES(?,?,?)", [Id, Status, jsx:encode(Job)]),
+    case maps:is_key(<<"evolution_job">>, Job) of
+        true -> {ok, _} = evolution_result(ae_evolution_store:dispatch(Db, {deployment_transition, Job})), ok;
+        false -> ok end.
+require_evolution(Db, Job) ->
+    case maps:is_key(<<"evolution_job">>, Job) of
+        true -> evolution_result(ae_evolution_store:dispatch(Db, {check_deployment, Job}));
+        false -> ok end.
+evolution_result({error, _} = Error) -> throw(Error);
+evolution_result(Result) -> Result.
 job(Db, Id) ->
     case rows(Db, "SELECT data FROM deployments WHERE id=?", [Id]) of
         [] -> undefined; [{Data}] -> jsx:decode(Data, [return_maps]) end.

@@ -64,8 +64,9 @@ toolchain compatibility and pinned recipe/dependency hashes. Its `authoring` is
 `llm` and `evaluation` is null. Publication alone does not make it deployable:
 ordinary deployment rejects generated artifacts with
 `independent_evaluation_required`. The supervised independent evaluator is
-documented in [EVALUATION.md](EVALUATION.md); generated-artifact approval and the
-overall evolution lifecycle still need integration before enabling self-evolution.
+documented in [EVALUATION.md](EVALUATION.md). Job-bound generated staging and
+manual approval are implemented; the orchestration state machine and CLI trigger
+are still required before enabling self-evolution.
 Missing isolation never falls back to the manual host compiler.
 
 Configure the internal builder through `AE_BUILD_CONFIG_JSON`. Every field is

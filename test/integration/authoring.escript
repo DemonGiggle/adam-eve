@@ -19,7 +19,8 @@ main([Scenario, LimitsPath]) ->
             BuildResult = receive {ae_build_result, Id, R} -> R after 15000 -> error(builder_did_not_finish) end,
             receive {'DOWN', Ref, process, Pid, normal} -> ok after 5000 -> error(builder_did_not_stop) end,
             BuildResult;
-        Scenario0 when Scenario0 =:= "builder-success"; Scenario0 =:= "evaluator-success"; Scenario0 =:= "evaluator-unavailable" ->
+        Scenario0 when Scenario0 =:= "builder-success"; Scenario0 =:= "evaluator-success";
+                Scenario0 =:= "evaluator-unavailable"; Scenario0 =:= "deployment-rollback" ->
             {ok, _} = ae_router:author(Id),
             {ok, Pid} = ae_build_sup:start_job(Id, Config, self()), Ref = monitor(process, Pid),
             Wait = maps:get(<<"total_ms">>, Limits),
@@ -42,7 +43,8 @@ main([Scenario, LimitsPath]) ->
                             #{<<"approval_ttl_ms">> => 60000, <<"observe_ms">> => 60000});
                         _ -> ok
                     end,
-                    false = code:is_loaded(seed_agent), Evaluated
+                    false = code:is_loaded(seed_agent),
+                    case Scenario of "deployment-rollback" -> deploy_and_rollback(Id); _ -> Evaluated end
             end;
         "repair" ->
             {ok, #{<<"attempt">> := 1}} = ae_router:author(Id),
@@ -51,6 +53,11 @@ main([Scenario, LimitsPath]) ->
         _ -> ae_router:author(Id)
     end,
     Saved = ae_store:evolution({get, Id}),
+    case maps:get(<<"status">>, Saved) of
+        Phase when Phase =:= <<"building">>; Phase =:= <<"testing">>; Phase =:= <<"evaluated">> ->
+            {error, invalid_job_state} = ae_router:author(Id);
+        _ -> ok
+    end,
     %% Accepted proposal retransmission must never allocate a second build.
     Replay = case Result of
         {ok, Record} when is_map_key(<<"patch">>, Record) ->
@@ -66,6 +73,31 @@ main([Scenario, LimitsPath]) ->
         <<"duplicate_reused">> => Replay, <<"conversation">> => render(Conversation),
         <<"status">> => ae_router:status()}), "\n"]),
     application:stop(ae_core).
+deploy_and_rollback(Id) ->
+    Base = ae_store:routing(),
+    {ok, Summary} = ae_deployment:stage_evolution(Id),
+    Id = maps:get(<<"evolution_job">>, Summary), DepId = maps:get(<<"deployment_id">>, Summary),
+    {error, approval_mismatch} = ae_deployment:approve(DepId, <<"wrong-evaluation-approval">>),
+    Base = ae_store:routing(),
+    {ok, <<"conversation still works">>} = ae_router:turn(<<"awaiting-approval">>, <<"test">>, <<"hello">>),
+    {ok, Promoted} = ae_deployment:approve(DepId, maps:get(<<"approval_binding">>, Summary)),
+    <<"eve">> = maps:get(<<"slot">>, Promoted),
+    {ok, <<"authored:conversation still works">>} = ae_router:turn(<<"candidate-ack">>, <<"test">>, <<"hello">>),
+    #{<<"os_pid">> := OsPid} = ae_router:status(),
+    os:cmd("kill -9 " ++ integer_to_list(OsPid)),
+    wait_rollback(Id, erlang:monotonic_time(millisecond) + 120000),
+    Restored = ae_store:routing(), <<"adam">> = maps:get(<<"slot">>, Restored),
+    true = maps:get(<<"epoch">>, Restored) > maps:get(<<"epoch">>, Promoted),
+    {ok, <<"authored:conversation still works">>} = ae_router:turn(<<"candidate-ack">>, <<"test">>, <<"hello">>),
+    [#{<<"text">> := <<"conversation still works">>}] = [Result || {_, <<"tool_result">>,
+        #{<<"request_id">> := <<"candidate-ack">>, <<"key">> := <<"llm">>, <<"result">> := Result}} <- ae_store:events()],
+    {ok, #{<<"rolled_back">> => true, <<"acknowledged_reply_retained">> => true}}.
+wait_rollback(Id, Deadline) ->
+    case ae_store:evolution({get, Id}) of
+        #{<<"status">> := <<"rolled_back">>} -> ok;
+        _ -> true = erlang:monotonic_time(millisecond) < Deadline,
+            receive after 50 -> wait_rollback(Id, Deadline) end
+    end.
 check_cache(Id) ->
     Route = ae_store:routing(), Artifact = maps:get(<<"artifact">>, Route),
     Auth = {maps:get(<<"slot">>, Route), maps:get(<<"runtime_instance_id">>, Route), maps:get(<<"epoch">>, Route)},

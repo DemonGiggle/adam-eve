@@ -92,10 +92,10 @@ def main():
         try:
             scenarios = ["success", "protected", "budget", "invalid", "missing-usage", "over-budget", "cache", "repair", "builder-unavailable"]
             if os.environ.get("AE_TEST_CGROUP_ROOT"):
-                scenarios.extend(["builder-success", "evaluator-success", "evaluator-unavailable"])
+                scenarios.extend(["builder-success", "evaluator-success", "evaluator-unavailable", "deployment-rollback"])
             if os.environ.get("AE_TEST_AUTHORING_SCENARIOS"):
                 scenarios = os.environ["AE_TEST_AUTHORING_SCENARIOS"].split(",")
-                assert all(s in {"success", "protected", "budget", "invalid", "missing-usage", "over-budget", "cache", "repair", "builder-unavailable", "builder-success", "evaluator-success", "evaluator-unavailable"} for s in scenarios)
+                assert all(s in {"success", "protected", "budget", "invalid", "missing-usage", "over-budget", "cache", "repair", "builder-unavailable", "builder-success", "evaluator-success", "evaluator-unavailable", "deployment-rollback"} for s in scenarios)
             original_patch = Provider.patch
             for scenario in scenarios:
                 print("Authoring scenario: " + scenario, flush=True)
@@ -103,7 +103,7 @@ def main():
                 Provider.requests = []
                 Provider.conversation_requests = 0
                 Provider.patch = original_patch
-                if scenario.startswith("evaluator-"):
+                if scenario.startswith(("evaluator-", "deployment-")):
                     path = "apps/ae_seed/src/seed_agent.erl"
                     source = (CHECKOUT / path).read_text()
                     changed = source.replace('<<"text">> => Text, <<"event_refs">> => []',
@@ -114,11 +114,11 @@ def main():
                 policy = {**limits, "max_llm_calls": 1} if scenario == "budget" else limits
                 if scenario == "repair":
                     policy = {**limits, "max_llm_calls": 8, "max_tokens": 262144}
-                if scenario in ("builder-success", "evaluator-success", "evaluator-unavailable"):
+                if scenario in ("builder-success", "evaluator-success", "evaluator-unavailable", "deployment-rollback"):
                     wall_ms = int(os.environ.get("AE_TEST_BUILD_WALL_MS", "20000"))
                     cpu_ms = int(os.environ.get("AE_TEST_BUILD_CPU_MS", "10000"))
                     policy = {**limits, "total_ms": wall_ms * 3, "build_ms": wall_ms, "cpu_ms": cpu_ms * 3}
-                if scenario.startswith("evaluator-"):
+                if scenario.startswith(("evaluator-", "deployment-")):
                     evaluation_wall = int(os.environ.get("AE_TEST_EVAL_WALL_MS", "180000"))
                     evaluation_cpu = int(os.environ.get("AE_TEST_EVAL_CPU_MS", "60000"))
                     policy.update({"total_ms": wall_ms * 2 + evaluation_wall * 2,
@@ -126,7 +126,7 @@ def main():
                 limit_file = root / "limits.json"
                 limit_file.write_text(json.dumps(policy))
                 extra_env = {}
-                if scenario in ("builder-unavailable", "builder-success", "evaluator-success", "evaluator-unavailable"):
+                if scenario in ("builder-unavailable", "builder-success", "evaluator-success", "evaluator-unavailable", "deployment-rollback"):
                     if scenario == "builder-unavailable":
                         fake = root / "fake-cgroup"
                         fake.mkdir()
@@ -139,7 +139,7 @@ def main():
                         "sandbox_limits": {"memory_bytes": 536870912, "pids": 32, "cpu_percent": 100,
                             "cpu_seconds": (cpu_ms + 999) // 1000, "address_space_bytes": 1073741824, "file_bytes": 33554432,
                             "open_files": 128, "output_bytes": 16777216, "wall_ms": wall_ms}})
-                if scenario.startswith("evaluator-"):
+                if scenario.startswith(("evaluator-", "deployment-")):
                     sys.path.insert(0, str(CHECKOUT / "test/evaluation"))
                     import test_evaluate
                     evaluation = json.loads(extra_env["AE_BUILD_CONFIG_JSON"])
@@ -152,6 +152,9 @@ def main():
                         fake_evaluation.mkdir()
                         evaluation["cgroup_root"] = str(fake_evaluation)
                     extra_env["AE_EVAL_CONFIG_JSON"] = json.dumps(evaluation)
+                if scenario == "deployment-rollback":
+                    extra_env.update({"AE_APPROVAL_TTL_MS": "120000", "AE_OBSERVE_MS": "60000",
+                        "AE_HEALTH_INTERVAL_MS": "250", "AE_QUIESCE_TIMEOUT_MS": "5000"})
                 result = subprocess.run(["escript", str(CHECKOUT / "test/integration/authoring.escript"), scenario, str(limit_file)],
                     cwd=CHECKOUT, env={**os.environ, "AE_DATA_ROOT": str(root), "AE_LLM_MODEL": "fixture",
                         "AE_LLM_URL": f"http://127.0.0.1:{server.server_port}/api/chat", **extra_env},
@@ -159,7 +162,7 @@ def main():
                 assert result.returncode == 0, result.stdout + result.stderr
                 output = json.loads(result.stdout.splitlines()[0])
                 assert output["conversation"]["ok"] == "conversation still works", output
-                assert Provider.conversation_requests == (2 if scenario.startswith("evaluator-") else 1)
+                assert Provider.conversation_requests == (4 if scenario == "deployment-rollback" else 2 if scenario.startswith("evaluator-") else 1)
                 assert output["status"]["evolution_enabled"] is False
                 job = output["job"]
                 assert job["reserved_tokens"] == job["llm_calls"] * policy["tokens_per_call"]
@@ -185,10 +188,10 @@ def main():
                     assert job["built_artifact"] == manifest
                     assert next(iter(job["executions"].values()))["status"] == "completed"
                     assert (root / "artifacts" / manifest["digest"] / "seed").is_file()
-                elif scenario.startswith("evaluator-"):
+                elif scenario.startswith(("evaluator-", "deployment-")):
                     assert job["reserved_cpu_ms"] == cpu_ms + evaluation_cpu, output
-                    if scenario == "evaluator-success":
-                        assert job["status"] == "evaluated", output
+                    if scenario in ("evaluator-success", "deployment-rollback"):
+                        assert job["status"] == ("rolled_back" if scenario == "deployment-rollback" else "evaluated"), output
                         scorecard = job["evaluations"]["1"]["scorecard"]
                         assert scorecard["passed"] is True and all(scorecard["gates"].values()), scorecard
                         assert scorecard["baseline"]["objective"]["rate_ppm"] == 0
@@ -208,9 +211,11 @@ def main():
                     assert job["attempts"] == 0
                 assert not list((root / "workspaces").iterdir())
                 with sqlite3.connect(root / "state/agent.sqlite3") as database:
-                    turns = database.execute("SELECT message,reply,status FROM turns").fetchall()
-                assert turns and all(turn == ("hello", "conversation still works", "completed") for turn in turns), turns
-            print("Authoring integration passed: scoped source, budgeted patches/repairs, dedupe, denial and usable conversation; generated releases remain unapproved.")
+                    turns = database.execute("SELECT request_id,message,reply,status FROM turns").fetchall()
+                assert turns and all(message == "hello" and status == "completed" and reply ==
+                    ("authored:conversation still works" if request == "candidate-ack" else "conversation still works")
+                    for request, message, reply, status in turns), turns
+            print("Authoring integration passed: scoped source, budgeted patches/repairs, dedupe, denial and usable conversation; generated releases require an explicit test-operator approval.")
         finally:
             server.shutdown()
             server.server_close()

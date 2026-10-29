@@ -17,6 +17,30 @@ dispatch(Db, {create, Expected, Origin, Objective, Limits}) ->
     end;
 dispatch(Db, {get, Id}) -> get(Db, Id);
 dispatch(Db, active) -> active(Db);
+dispatch(Db, {for_deployment, Id, Expected}) ->
+    Job = must_get(Db, Id), need(current(Db, Job) =:= ok, stale_or_expired_job),
+    need(ae_policy:same_baseline(Expected, maps:get(<<"baseline">>, Job)), stale_baseline),
+    need(maps:get(<<"status">>, Job) =:= <<"evaluated">>, independent_evaluation_required),
+    {ok, Job, evaluation_record(Job)};
+dispatch(Db, {check_deployment, Deployment}) ->
+    Job = must_get(Db, maps:get(<<"evolution_job">>, Deployment)),
+    need(current(Db, Job) =:= ok, stale_or_expired_job),
+    need(maps:get(<<"deployment_id">>, Job, null) =:= maps:get(<<"id">>, Deployment), deployment_mismatch),
+    check_deployment(Job, Deployment), ok;
+dispatch(Db, {deployment_transition, Deployment}) ->
+    Id = maps:get(<<"evolution_job">>, Deployment), Job = must_get(Db, Id),
+    [{Saved}] = ae_sql:rows(Db, "SELECT data FROM deployments WHERE id=?", [maps:get(<<"id">>, Deployment)]),
+    need(jsx:decode(Saved, [return_maps]) =:= Deployment, deployment_mismatch),
+    check_deployment(Job, Deployment),
+    Phase = maps:get(<<"status">>, Deployment),
+    case maps:get(<<"deployment_id">>, Job, undefined) of
+        undefined -> need(maps:get(<<"status">>, Job) =:= <<"evaluated">> andalso Phase =:= <<"staging">>, invalid_job_state);
+        DepId -> need(DepId =:= maps:get(<<"id">>, Deployment) andalso not terminal(Job), invalid_job_state)
+    end,
+    Fields = maps:with([<<"promoted_route">>, <<"rollback_route">>, <<"reason">>, <<"approval_binding">>], Deployment),
+    New = maps:merge(Job#{<<"status">> := Phase, <<"deployment_id">> => maps:get(<<"id">>, Deployment)}, Fields),
+    save(Db, New), event(Db, <<"evolution_transition">>, #{<<"job_id">> => Id, <<"status">> => Phase,
+        <<"deployment_id">> => maps:get(<<"id">>, Deployment)}), {ok, New};
 dispatch(Db, {attempt, Id, Number}) ->
     case ae_sql:rows(Db, "SELECT data FROM evolution_proposals WHERE job_id=? AND attempt=?", [Id, Number]) of
         [] -> undefined; [{Data}] -> jsx:decode(Data, [return_maps]) end;
@@ -101,11 +125,14 @@ dispatch(Db, {execution_failed, Id, Attempt, Kind, LeaseId, Reason, PublicDiagno
 dispatch(Db, {authorize, Auth, Id}) -> authorized(Db, Auth, Id);
 dispatch(Db, {source_violation, Auth, Id}) ->
     case authorized(Db, Auth, Id) of
-        {ok, Job} -> finish(Db, Job, <<"rejected">>, <<"protected_source">>), {error, protected_source};
+        {ok, #{<<"status">> := <<"proposing">>} = Job} ->
+            finish(Db, Job, <<"rejected">>, <<"protected_source">>), {error, protected_source};
+        {ok, _} -> {error, invalid_job_state};
         Error -> Error
     end;
 dispatch(Db, {cancel, Id, Reason}) ->
     Job = must_get(Db, Id), need(not terminal(Job), job_finished),
+    need(not maps:is_key(<<"deployment_id">>, Job), job_in_deployment),
     finish(Db, Job, <<"cancelled">>, Reason), ok;
 dispatch(Db, {source_reserve, Auth, Id}) ->
     case authorized(Db, Auth, Id) of
@@ -154,12 +181,15 @@ dispatch(Db, {attempt_result, Id, Attempt, Outcome, PublicDiagnostics}) ->
     case current(Db, Job) of
         ok -> attempt_result(Db, Job, Attempt, Outcome, PublicDiagnostics);
         Reason ->
-            case terminal(Job) of true -> ok; false -> finish(Db, Job, <<"cancelled">>, Reason) end,
+            cancel_unlinked(Db, Job, Reason),
             {error, Reason}
     end;
 dispatch(Db, reconcile) ->
     case active(Db) of
         undefined -> ok;
+        %% A linked deployment owns its own expiry, recovery and rollback. Never
+        %% cancel it between the routing commit and its transactional job update.
+        #{<<"deployment_id">> := _} = Job -> {ok, Job};
         Job -> case current(Db, Job) of
             ok -> {ok, Job};
             Reason -> finish(Db, Job, <<"cancelled">>, Reason), {error, Reason}
@@ -270,21 +300,47 @@ authorized(Db, {Slot, Instance, Epoch}, Id) ->
     need(not ae_sql:recovery_pending(Db), restore_verification_required),
     need(maps:get(<<"admission">>, Route, <<"open">>) =:= <<"open">>, quiescing),
     Job = must_get(Db, Id),
+    Base = maps:get(<<"baseline">>, Job),
+    need({Slot, Instance, Epoch} =:= {maps:get(<<"slot">>, Base), maps:get(<<"runtime_instance_id">>, Base),
+        maps:get(<<"epoch">>, Base)}, stale_author),
     case current(Db, Job) of
         ok -> {ok, Job};
         Reason ->
-            case terminal(Job) of true -> ok; false -> finish(Db, Job, <<"cancelled">>, Reason) end,
+            cancel_unlinked(Db, Job, Reason),
             {error, Reason}
     end;
 authorized(_, _, _) -> {error, stale_runtime}.
 current(Db, Job) ->
     case terminal(Job) of
         true -> job_finished;
-        false -> case ae_policy:same_baseline(route(Db), maps:get(<<"baseline">>, Job)) of
+        false ->
+            Expected = case maps:get(<<"status">>, Job) of
+                <<"observing">> -> maps:get(<<"promoted_route">>, Job);
+                _ -> maps:get(<<"baseline">>, Job) end,
+            case ae_policy:same_baseline(route(Db), Expected) of
             false -> stale_baseline;
             true -> case now_ms() < maps:get(<<"deadline">>, Job) of true -> ok; false -> job_expired end
         end
     end.
+cancel_unlinked(Db, Job, Reason) ->
+    case terminal(Job) orelse maps:is_key(<<"deployment_id">>, Job) of
+        true -> ok;
+        false -> finish(Db, Job, <<"cancelled">>, Reason)
+    end.
+evaluation_record(Job) ->
+    Attempt = maps:get(<<"attempts">>, Job),
+    Record = maps:get(integer_to_binary(Attempt), maps:get(<<"evaluations">>, Job, #{}), undefined),
+    need(is_map(Record), independent_evaluation_required),
+    Score = maps:get(<<"scorecard">>, Record), Hash = maps:get(<<"digest">>, Record),
+    Lease = maps:get(execution_key(Attempt, <<"evaluate">>), maps:get(<<"executions">>, Job)),
+    need(Hash =:= maps:get(<<"evaluation_digest">>, Job) andalso Hash =:= ae_policy:digest(Score) andalso
+        maps:get(<<"passed">>, Score) =:= true andalso maps:get(<<"status">>, Lease) =:= <<"completed">> andalso
+        maps:get(<<"evaluation_digest">>, Lease) =:= Hash andalso ae_evaluator:valid_result(Score, Job, Lease),
+        invalid_evaluation_result), Record.
+check_deployment(Job, Deployment) ->
+    need(maps:get(<<"candidate">>, Deployment) =:= maps:get(<<"built_artifact">>, Job) andalso
+        ae_policy:same_baseline(maps:get(<<"baseline">>, Deployment), maps:get(<<"baseline">>, Job)) andalso
+        maps:get(<<"independent_evaluation">>, Deployment) =:= evaluation_record(Job), evaluation_mismatch).
 rationale(P) ->
     lists:all(fun(K) -> text(maps:get(K, P, null), 4096) end, [<<"hypothesis">>, <<"expected_benefit">>]) andalso
     lists:all(fun(K) -> V = maps:get(K, P, null), is_list(V) andalso length(V) =< 32 andalso
@@ -328,11 +384,11 @@ execution_key(Attempt, Kind) when is_integer(Attempt), is_binary(Kind) ->
 need(true, _) -> ok;
 need(false, Reason) -> throw({error, Reason}).
 now_ms() -> erlang:system_time(millisecond).
-terminal(Job) -> lists:member(maps:get(<<"status">>, Job), [<<"rejected">>, <<"cancelled">>, <<"completed">>]).
+terminal(Job) -> lists:member(maps:get(<<"status">>, Job), [<<"rejected">>, <<"cancelled">>, <<"completed">>, <<"rolled_back">>]).
 get(Db, Id) -> case ae_sql:rows(Db, "SELECT data FROM evolution_jobs WHERE id=?", [Id]) of
     [] -> undefined; [{Data}] -> jsx:decode(Data, [return_maps]) end.
 must_get(Db, Id) -> Job = get(Db, Id), need(is_map(Job), unknown_job), Job.
-active(Db) -> case ae_sql:rows(Db, "SELECT data FROM evolution_jobs WHERE status NOT IN ('rejected','cancelled','completed')", []) of
+active(Db) -> case ae_sql:rows(Db, "SELECT data FROM evolution_jobs WHERE status NOT IN ('rejected','cancelled','completed','rolled_back')", []) of
     [] -> undefined; [{Data}] -> jsx:decode(Data, [return_maps]) end.
 route(Db) -> case ae_sql:rows(Db, "SELECT data FROM routing WHERE id=1", []) of
     [] -> undefined; [{Data}] -> jsx:decode(Data, [return_maps]) end.

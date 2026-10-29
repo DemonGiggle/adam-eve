@@ -6,7 +6,7 @@ controller-authorized job with the active runtime. The source/status and budgete
 LLM broker capabilities are available only during that exchange, bound to its
 job, generation, authenticated runtime and epoch. There is no CLI evolution
 command yet, and `evolution_enabled` remains false. The orchestrating
-`ae_evolution` state machine, generated-artifact approval integration, and
+`ae_evolution` state machine and
 publication/retention recovery remain
 required before the Phase 2 exit criterion can be claimed.
 The fixed reproducible seed recipe is available separately; see [BUILD.md](BUILD.md).
@@ -15,6 +15,18 @@ leases, and the gate that keeps its unevaluated output out of production.
 Operator backup/restore and its local recovery drill are in [RECOVERY.md](RECOVERY.md).
 The supervised independent evaluator and durable scorecards are implemented;
 see [EVALUATION.md](EVALUATION.md). They do not enable deployment by themselves.
+An evaluated job can now be passed to `ae_deployment:stage_evolution/1` by trusted
+controller code. Staging combines its immutable scorecard with fresh standby
+checks; the operator must explicitly approve the resulting artifact/baseline/
+evaluation binding. The digest-only manual staging path still rejects generated
+releases. Every linked deployment transition updates the evolution job inside
+the routing/store transaction, including observation completion and rollback.
+Approval expiry is capped by the job deadline, and promotion must leave enough
+budget for observation. Authoring remains bound to the original author, even
+after the candidate has become active.
+Staged runtimes currently use the explicit runtime sandbox ceilings and bounded
+approval/job lifetimes. Charging that runtime against the job's aggregate CPU
+reservation is still required alongside orchestration before enabling evolution.
 
 ## Authoring path
 
@@ -69,7 +81,9 @@ same SQLite transaction mechanism as routing and conversation. New tables retain
 jobs, proposal fingerprints/patch hashes, accepted attempts, and LLM reservations.
 The ledger implements proposing, accepted-for-build, testing, evaluated, bounded
 repair, rejection, and cancellation. Supervised workers perform isolated builds
-and evaluations; the ledger does not deploy artifacts.
+and evaluations; linked deployment transitions cover staging, manual approval,
+quiescence, observation, completion, rejection, and rollback. The orchestration
+state machine and CLI trigger remain unfinished.
 
 Creating a job requires a trusted `origin_ref`, objective, the committed active
 slot/runtime/generation/source/epoch, and a complete validated limits map. There

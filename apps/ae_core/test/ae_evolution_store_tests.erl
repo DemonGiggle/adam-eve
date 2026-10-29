@@ -159,6 +159,98 @@ small_feedback_budget_still_retains_scorecard_test() ->
         ?assertEqual(Score, maps:get(<<"scorecard">>, maps:get(<<"1">>, maps:get(<<"evaluations">>, Repaired))))
     end).
 
+evaluated_artifact_approval_and_rollback_are_linked_test() ->
+    with_store(fun(Base, Auth) ->
+        {Id, Built} = built_job(Base, Auth), Candidate = maps:get(<<"built_artifact">>, Built),
+        ?assertEqual({error, independent_evaluation_required}, ae_store:new_evolution_deployment(Base, Id, Candidate, handoff_limits())),
+        Evaluated = evaluated_job(Id, Built),
+        ?assertEqual({error, candidate_changed}, ae_store:new_evolution_deployment(Base, Id, Candidate#{<<"objective">> => <<"changed">>}, handoff_limits())),
+        ?assertEqual({error, independent_evaluation_required}, ae_store:new_deployment(Base, Candidate, handoff_limits())),
+        ?assertEqual({error, job_budget_exhausted}, ae_store:new_evolution_deployment(Base, Id, Candidate,
+            (handoff_limits())#{<<"observe_ms">> := 60000})),
+        {ok, Dep} = ae_store:new_evolution_deployment(Base, Id, Candidate, handoff_limits()), DepId = maps:get(<<"id">>, Dep),
+        ?assertEqual(<<"staging">>, maps:get(<<"status">>, e({get, Id}))),
+        ?assertEqual({error, job_in_deployment}, e({cancel, Id, <<"must use deployment rejection">>})),
+        Score = maps:get(<<"1">>, maps:get(<<"evaluations">>, Evaluated)),
+        Desc = #{<<"slot">> => <<"eve">>, <<"runtime_instance_id">> => <<"candidate">>, <<"artifact">> => Candidate},
+        Checks = #{<<"protocol_v1">> => true, <<"schema_v1">> => true, <<"synthetic_turn">> => true,
+            <<"production_tools">> => false, <<"reply_digest">> => binary:copy(<<"d">>, 64)},
+        Evaluation = #{<<"staging">> => Checks, <<"independent">> => Score},
+        ?assertEqual({error, evaluation_mismatch}, ae_store:staged(DepId, Desc, Evaluation#{<<"independent">> := #{}})),
+        ?assertEqual({error, invalid_staging_evaluation}, ae_store:staged(DepId, Desc,
+            Evaluation#{<<"staging">> := Checks#{<<"synthetic_turn">> := false}})),
+        {ok, Staged} = ae_store:staged(DepId, Desc, Evaluation),
+        BadBinding = ae_policy:binding(Staged#{<<"evaluation">> := Evaluation#{<<"independent">> := #{}}}),
+        ?assertEqual({error, approval_mismatch}, ae_store:approve(DepId, BadBinding)),
+        ?assertEqual(Base, ae_store:routing()),
+        {ok, _} = ae_store:approve(DepId, ae_policy:binding(Staged)),
+        {ok, Closed} = ae_store:quiesce(Base, DepId), {ok, CP} = ae_store:checkpoint(Closed),
+        {ok, Promoted} = ae_store:promote(DepId, Closed, Desc, maps:get(<<"checkpoint_id">>, CP)),
+        ?assertEqual(<<"observing">>, maps:get(<<"status">>, e({get, Id}))),
+        ?assertMatch({ok, #{<<"status">> := <<"observing">>}}, e(reconcile)),
+        NewAuth = {<<"eve">>, <<"candidate">>, maps:get(<<"epoch">>, Promoted)},
+        ?assertEqual({error, stale_author}, e({authorize, NewAuth, Id})),
+        {ok, pending} = ae_store:begin_turn(NewAuth, <<"candidate-work">>, <<"s">>, <<"remember">>),
+        {ok, reserved} = ae_store:reserve_tool(NewAuth, <<"candidate-work">>, <<"llm">>),
+        {ok, _} = ae_store:finish_tool(NewAuth, <<"candidate-work">>, <<"llm">>, #{<<"text">> => <<"saved-result">>}),
+        {ok, _} = ae_store:finish_turn(NewAuth, <<"candidate-work">>, <<"saved-reply">>),
+        gen_server:stop(ae_store), {ok, _} = ae_store:start_link(get(test_root)),
+        ?assertMatch({rollback, #{<<"id">> := DepId}}, ae_store:recover_handoff()),
+        {ok, RollbackBase} = ae_store:quiesce(Promoted, null), {ok, Latest} = ae_store:checkpoint(RollbackBase),
+        Prior = #{<<"slot">> => <<"adam">>, <<"runtime_instance_id">> => <<"restored">>, <<"artifact">> => maps:get(<<"artifact">>, Base)},
+        {ok, Restored} = ae_store:rollback(DepId, RollbackBase, Prior, maps:get(<<"checkpoint_id">>, Latest), <<"candidate_failed">>),
+        ?assertEqual(3, maps:get(<<"epoch">>, Restored)),
+        ?assertEqual(<<"rolled_back">>, maps:get(<<"status">>, e({get, Id}))), ?assertEqual(undefined, e(active)),
+        RestoredAuth = {<<"adam">>, <<"restored">>, 3},
+        ?assertEqual({ok, {completed, <<"saved-reply">>}}, ae_store:begin_turn(RestoredAuth, <<"candidate-work">>, <<"s">>, <<"remember">>)),
+        ?assertEqual({error, invalid_turn}, ae_store:reserve_tool(RestoredAuth, <<"candidate-work">>, <<"llm">>)),
+        ?assertEqual([#{<<"text">> => <<"saved-result">>}], [Result || {_, <<"tool_result">>,
+            #{<<"request_id">> := <<"candidate-work">>, <<"result">> := Result}} <- ae_store:events()])
+    end).
+
+linked_completion_and_preapproval_restart_test() ->
+    [with_store(fun(Base, Auth) ->
+        {Id, Built} = built_job(Base, Auth), Evaluated = evaluated_job(Id, Built), Candidate = maps:get(<<"built_artifact">>, Built),
+        {ok, Dep} = ae_store:new_evolution_deployment(Base, Id, Candidate, (handoff_limits())#{<<"observe_ms">> := 1}),
+        DepId = maps:get(<<"id">>, Dep),
+        case Finish of
+            reject ->
+                gen_server:stop(ae_store), {ok, _} = ae_store:start_link(get(test_root)),
+                ?assertEqual(normal, ae_store:recover_handoff()),
+                ?assertEqual(<<"rejected">>, maps:get(<<"status">>, e({get, Id}))), ?assertEqual(Base, ae_store:routing());
+            complete ->
+                Score = maps:get(<<"1">>, maps:get(<<"evaluations">>, Evaluated)),
+                Desc = #{<<"slot">> => <<"eve">>, <<"runtime_instance_id">> => <<"candidate">>, <<"artifact">> => Candidate},
+                Checks = #{<<"protocol_v1">> => true, <<"schema_v1">> => true, <<"synthetic_turn">> => true,
+                    <<"production_tools">> => false, <<"reply_digest">> => binary:copy(<<"d">>, 64)},
+                {ok, Staged} = ae_store:staged(DepId, Desc, #{<<"staging">> => Checks, <<"independent">> => Score}),
+                {ok, _} = ae_store:approve(DepId, ae_policy:binding(Staged)),
+                {ok, Closed} = ae_store:quiesce(Base, DepId), {ok, CP} = ae_store:checkpoint(Closed),
+                {ok, Promoted} = ae_store:promote(DepId, Closed, Desc, maps:get(<<"checkpoint_id">>, CP)),
+                receive after 5 -> ok end, ok = ae_store:complete(DepId, Promoted),
+                ?assertEqual(<<"completed">>, maps:get(<<"status">>, e({get, Id}))), ?assertEqual(undefined, e(active))
+        end
+    end) || Finish <- [reject, complete]].
+
+evaluated_job(Id, Built) ->
+    {ok, Lease} = e({reserve_evaluation, Id, 1, 1000, 1000, evaluation_binding(), evaluation_configuration()}),
+    {ok, Evaluated} = e({finish_evaluation, Id, 1, maps:get(<<"id">>, Lease), scorecard(Built, Lease)}), Evaluated.
+expired_author_cannot_cancel_linked_deployment_test() ->
+    with_store(fun(Base, Auth) ->
+        {Id, Built} = built_job(Base, Auth, (limits())#{<<"total_ms">> := 1500}),
+        _ = evaluated_job(Id, Built),
+        {ok, Dep} = ae_store:new_evolution_deployment(Base, Id, maps:get(<<"built_artifact">>, Built),
+            (handoff_limits())#{<<"observe_ms">> := 1}),
+        ?assertEqual({error, invalid_job_state}, e({source_violation, Auth, Id})),
+        receive after 1550 -> ok end,
+        ?assertEqual({error, job_expired}, e({authorize, Auth, Id})),
+        ?assertEqual(<<"staging">>, maps:get(<<"status">>, e({get, Id}))),
+        ?assertEqual(ok, ae_store:reject(maps:get(<<"id">>, Dep), <<"expired">>)),
+        ?assertEqual(<<"rejected">>, maps:get(<<"status">>, e({get, Id})))
+    end).
+handoff_limits() -> #{<<"approval_ttl_ms">> => 30000, <<"observe_ms">> => 1000,
+    <<"health_interval_ms">> => 10, <<"quiesce_ms">> => 1000}.
+
 built_job(Base, Auth) -> built_job(Base, Auth, limits()).
 built_job(Base, Auth, Limits) ->
     {ok, Job} = e({create, Base, <<"evaluation-test">>, <<"improve">>, Limits}), Id = maps:get(<<"id">>, Job),

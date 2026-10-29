@@ -4,7 +4,9 @@
 `ae_evaluator` for a built job in `testing`. It runs the controller-owned Python
 judge outside the candidate runtime. There is no evolution CLI or automatic
 build-to-evaluation orchestration yet. Evaluation does not grant deployment
-approval; the ordinary deployment path still rejects generated releases.
+approval. Digest-only manual staging rejects generated releases; trusted
+`ae_deployment:stage_evolution/1` requires the specific evaluated job, performs
+fresh isolated standby checks, and then waits for explicit bound approval.
 
 ## Isolation and durable results
 
@@ -50,8 +52,9 @@ Baseline and candidate receive the same independently generated nonce cases.
 After stopping the candidate through its sandbox owner's pipe, the judge starts
 a fresh predecessor, restores a later synthetic sequence, and tests context that
 includes a candidate reply. This is a synthetic compatibility check. The actual
-store's completed-effect preservation and full generated-candidate handoff still
-need end-to-end lifecycle acceptance coverage.
+store's completed-effect preservation is tested separately through an actual
+generated-candidate promotion/crash/rollback. Successive LLM-authored generations
+and full orchestrator recovery still need end-to-end acceptance coverage.
 
 The supplementary recipe compiles agent test modules and runs EUnit and Common
 Test suites. A configured minimum module count can require agent tests. Common
@@ -119,4 +122,7 @@ checks concurrent conversation service, no synthetic turns in production
 history, retained private policy bytes, and fail-closed unavailable isolation.
 Software emulation used explicit test allowances of 180000 ms wall/90000 ms CPU
 for builds and 600000 ms wall/240000 ms aggregate reserved CPU for evaluations.
-These checks use a fixture provider, not live-model authoring or production promotion.
+An additional VM integration explicitly approves and promotes a fixture-authored
+candidate, kills it after an acknowledged reply/tool result, and verifies both
+records after rollback under a new epoch. These checks use a fixture provider;
+they do not establish live-model authoring quality or authorize a user's production identity.
