@@ -1,0 +1,6 @@
+_build/
+**/_build/
+erl_crash.dump
+*.beam
+.eunit/
+__pycache__/

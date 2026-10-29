@@ -1,0 +1,6 @@
+{application, ae_protocol, [
+    {description, "Bounded JSON protocol for isolated adam-eve runtimes"},
+    {vsn, "0.1.0"},
+    {applications, [kernel, stdlib, jsx]},
+    {modules, []}
+]}.
