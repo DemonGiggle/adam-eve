@@ -16,6 +16,18 @@ validation_test() ->
     ?assertEqual({error, oversized_message},
                  ae_protocol:decode(binary:copy(<<"x">>, ae_protocol:max_bytes() + 1))).
 
+evolution_schema_test() ->
+    Proposal = #{<<"protocol_version">> => 1, <<"type">> => <<"evolution_proposal">>,
+        <<"job_id">> => <<"authorized-job">>, <<"proposal_id">> => <<"attempt-1">>,
+        <<"epoch">> => 1, <<"base_artifact">> => <<"artifact">>, <<"base_source_revision">> => <<"revision">>,
+        <<"patch">> => <<"bounded diff">>, <<"hypothesis">> => <<"improve">>,
+        <<"expected_benefit">> => <<"improved recall">>, <<"risks">> => [], <<"requested_tests">> => [<<"replay">>]},
+    ?assertEqual({ok, Proposal}, ae_protocol:decode(jsx:encode(Proposal))),
+    ?assertEqual({error, invalid_message}, ae_protocol:validate(Proposal#{<<"epoch">> := 0})),
+    ?assertEqual({error, invalid_message}, ae_protocol:validate(maps:remove(<<"job_id">>, Proposal))),
+    ?assertEqual({error, invalid_message}, ae_protocol:validate(Proposal#{<<"patch">> := binary:copy(<<"x">>, 262145)})),
+    ?assertEqual({error, invalid_message}, ae_protocol:validate(Proposal#{<<"requested_tests">> := lists:duplicate(33, <<"x">>)})).
+
 framing_test() ->
     {ok, Listen} = gen_tcp:listen(0, ae_protocol:socket_options()),
     {ok, Port} = inet:port(Listen),
