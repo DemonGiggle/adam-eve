@@ -214,3 +214,8 @@ the full restricted failure matrix, retention cleanup, and off-host recovery
 validation remain unfinished. The escript retains compiled code and dependencies;
 its recorded host ERTS must remain installed. No live-model quality claim is made
 by the fixture tests.
+
+The opt-in [live-model demonstration](docs/LIVE_EVOLUTION.md) runs two successive
+authoring objectives with a real local Ollama model and the restricted backend,
+retaining review and restart evidence. It is separate from the fixture suite;
+its presence does not establish that the live-model acceptance criterion passes.

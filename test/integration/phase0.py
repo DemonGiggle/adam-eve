@@ -55,6 +55,8 @@ class Provider(BaseHTTPRequestHandler):
 
 
 class Controller:
+    response_timeout = 25
+
     def __init__(self, root, port, settings=None):
         self.errors = tempfile.TemporaryFile(mode="w+")
         self.process = subprocess.Popen([str(CHECKOUT / "scripts/ae")], cwd=CHECKOUT,
@@ -71,7 +73,7 @@ class Controller:
         selector = selectors.DefaultSelector()
         selector.register(self.process.stdout, selectors.EVENT_READ)
         try:
-            assert selector.select(25), "controller response timed out"
+            assert selector.select(self.response_timeout), "controller response timed out"
             line = self.process.stdout.readline()
             if not line:
                 self.errors.seek(0)

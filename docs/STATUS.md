@@ -79,6 +79,10 @@ authoring. The operator configures the installed model through `AE_LLM_MODEL`;
 the broker owns the endpoint and enforces time/output limits, with durable token
 and cost reservations for authoring. There are no OpenAI or Anthropic adapters.
 Automated checks use a fixture provider rather than an installed live model.
+An opt-in real-model acceptance harness is documented in
+[LIVE_EVOLUTION.md](LIVE_EVOLUTION.md). A local Ollama preflight has succeeded;
+the initial live authoring attempt was cancelled for a malformed response before
+any build. Successful successive live-model generations remain unproven.
 
 Implementation details and test entry points are in [EVOLUTION.md](EVOLUTION.md),
 [BUILD.md](BUILD.md), [ISOLATION.md](ISOLATION.md), and [RECOVERY.md](RECOVERY.md).
