@@ -8,7 +8,8 @@ The development implementation now supports Phase 1: a trusted OTP controller
 serves isolated Adam/Eve BEAM processes, stages manually built candidates, and
 switches between them with durable approval, checkpoints, observation, and
 rollback. The seed calls a configured local Ollama model through a broker;
-conversation and pending turns survive runtime replacement. Evolution is disabled.
+conversation and pending turns survive runtime replacement. Evolution is disabled
+by default and requires explicit limits and restricted execution to enable.
 
 Phase 2 foundations now include a durable bounded authoring ledger, scoped
 paginated source access, a protected patch policy, and an optional restricted
@@ -16,9 +17,9 @@ runtime backend. The seed can read scoped source and submit budgeted structured
 LLM patches through an internal controller-authorized authoring exchange. The
 isolated builder now records execution budgets and retains generated releases
 for testing. A supervised independent evaluator now compares restricted releases
-and saves bound scorecards. Evaluated jobs can be staged internally and explicitly
-approved; lifecycle orchestration and a CLI trigger are still required before
-enabling evolution. See
+and saves bound scorecards. The evolution state machine and CLI drive bounded
+authoring/repair through staging and explicit approval, then track promotion and
+rollback. Persistent disable keeps ordinary service available. See
 [docs/EVALUATION.md](docs/EVALUATION.md). Consistent online backups and fenced restoration are
 available through the operator commands in [docs/RECOVERY.md](docs/RECOVERY.md).
 See [docs/EVOLUTION.md](docs/EVOLUTION.md) and
@@ -122,7 +123,7 @@ approvals, runtime replacement, or changed source/executable/manifest contents
 cannot authorize promotion. The current gates are the manual development
 handoff checks. Generated candidates use a separate job-bound staging entrypoint
 that includes the independent scorecard in the approval binding. The evolution
-orchestrator and CLI trigger remain unfinished.
+CLI trigger and controls are described in [docs/EVOLUTION.md](docs/EVOLUTION.md).
 
 Promotion closes admission and new broker calls, drains the in-flight turn or
 leaves it durably retryable at the configured deadline, saves a controller-owned
@@ -206,8 +207,10 @@ user. Generated candidates require the restricted Bubblewrap/cgroup backend;
 the supervised builder uses that backend and retains releases for evaluation.
 Restricted build and runtime crash-recovery checks have passed in a disposable
 Linux VM with cgroup delegation. A generated-candidate promotion/crash/rollback
-also preserves acknowledged work under that backend. The evolution orchestrator,
-successive live-LLM-authored generations, retention cleanup, and off-host recovery
+also preserves acknowledged work under that backend. An orchestrated variant
+repairs a real compiler failure, reaches explicit approval, and verifies persistent
+disable/re-enable across restart. Successive live-LLM-authored generations,
+the full restricted failure matrix, retention cleanup, and off-host recovery
 validation remain unfinished. The escript retains compiled code and dependencies;
 its recorded host ERTS must remain installed. No live-model quality claim is made
 by the fixture tests.

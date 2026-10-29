@@ -12,5 +12,6 @@ init(#{root := Root} = Config) ->
     Evaluations = #{id => ae_eval_sup, start => {ae_eval_sup, start_link, []}, type => supervisor},
     Router = #{id => ae_router, start => {ae_router, start_link, [Config]}},
     Deployment = #{id => ae_deployment, start => {ae_deployment, start_link, [Config]}},
+    Evolution = #{id => ae_evolution, start => {ae_evolution, start_link, [Config]}},
     {ok, {#{strategy => rest_for_one, intensity => 3, period => 30},
-           [Store, Broker, Runtimes, Builds, Evaluations, Router, Deployment]}}.
+           [Store, Broker, Runtimes, Builds, Evaluations, Router, Deployment, Evolution]}}.

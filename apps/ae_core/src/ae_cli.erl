@@ -36,6 +36,15 @@ command(#{<<"op">> := <<"turn">>, <<"request_id">> := Request,
         {error, Reason} -> #{<<"request_id">> => Request, <<"error">> => reason(Reason)}
     end;
 command(#{<<"op">> := <<"status">>}) -> ae_router:status();
+command(#{<<"op">> := <<"evolve">>, <<"origin_ref">> := Origin, <<"objective">> := Objective} = Command) when map_size(Command) =:= 3 ->
+    case ae_evolution:trigger(Origin, Objective) of {ok, Job} -> Job; Error -> result(Error) end;
+command(#{<<"op">> := <<"evolution">>, <<"job_id">> := Id} = Command) when map_size(Command) =:= 2 ->
+    case ae_evolution:job(Id) of {ok, Job} -> Job; Error -> result(Error) end;
+command(#{<<"op">> := <<"evolution">>} = Command) when map_size(Command) =:= 1 -> ae_evolution:status();
+command(#{<<"op">> := <<"evolution_enable">>, <<"enabled">> := Value} = Command) when map_size(Command) =:= 2, is_boolean(Value) ->
+    result(ae_evolution:set_enabled(Value));
+command(#{<<"op">> := <<"evolution_cancel">>, <<"job_id">> := Id} = Command) when map_size(Command) =:= 2 ->
+    result(ae_evolution:cancel(Id));
 command(#{<<"op">> := <<"restart">>}) -> result(ae_router:restart());
 command(#{<<"op">> := <<"restore_ready">>, <<"backup_id">> := Id, <<"origin_ref">> := Origin}) ->
     result(ae_router:restore_ready(Id, Origin));

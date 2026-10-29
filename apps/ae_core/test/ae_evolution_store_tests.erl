@@ -278,6 +278,103 @@ exhausted_staging_budget_cannot_create_deployment_test() ->
         ?assertEqual(undefined, ae_store:active_deployment()), ?assertEqual(Base, ae_store:routing())
     end).
 
+disable_persists_without_spending_or_stopping_user_service_test() ->
+    with_store(fun(Base, Auth) ->
+        {ok, Job} = e({create, Base, <<"disable-test">>, <<"improve">>, limits()}), Id = maps:get(<<"id">>, Job),
+        {ok, reserved} = e({reserve_llm, Auth, Id, <<"unknown-call">>, ae_policy:digest(<<"prompt">>)}),
+        ok = e({set_mode, false}),
+        gen_server:stop(ae_store), {ok, _} = ae_store:start_link(get(test_root)),
+        ?assertEqual(false, e(mode)),
+        ?assertEqual({error, evolution_disabled_or_cancelled}, e({source_reserve, Auth, Id})),
+        Saved = e({get, Id}), ?assertEqual(<<"cancelled">>, maps:get(<<"status">>, Saved)),
+        ?assertEqual(100, maps:get(<<"reserved_tokens">>, Saved)),
+        ?assertEqual(1, maps:get(<<"llm_calls">>, Saved)),
+        ?assertEqual({ok, pending}, ae_store:begin_turn(Auth, <<"ordinary-work">>, <<"s">>, <<"hello">>)),
+        ?assertEqual(Base, ae_store:routing()),
+        ok = e({set_mode, true}), ?assertEqual(true, e(mode)),
+        ?assertEqual(Saved, e({find_origin, <<"disable-test">>}))
+    end).
+
+cancelled_standby_cannot_be_approved_after_reenable_test() ->
+    with_store(fun(Base, Auth) ->
+        {Id, Staged, _} = staged_job(Base, Auth), DepId = maps:get(<<"id">>, Staged),
+        {ok, _} = e({request_cancel, Id, <<"operator_cancelled">>}),
+        ok = e({set_mode, false}), ok = e({set_mode, true}),
+        gen_server:stop(ae_store), {ok, _} = ae_store:start_link(get(test_root)),
+        ?assertEqual({error, evolution_disabled_or_cancelled}, ae_store:approve(DepId, ae_policy:binding(Staged))),
+        ?assertEqual(Base, ae_store:routing()),
+        ok = ae_store:reject(DepId, <<"operator_cancelled">>),
+        ?assertEqual(<<"rejected">>, maps:get(<<"status">>, e({get, Id}))),
+        ?assertMatch({ok, _}, e({request_cancel, Id, <<"idempotent">>}))
+    end).
+
+disabled_candidate_closes_admission_and_recovers_rollback_intent_test() ->
+    with_store(fun(Base, Auth) ->
+        {Id, Staged, Desc} = staged_job(Base, Auth), DepId = maps:get(<<"id">>, Staged),
+        {ok, _} = ae_store:approve(DepId, ae_policy:binding(Staged)),
+        {ok, Closed} = ae_store:quiesce(Base, DepId),
+        ok = ae_store:preparing_promotion(DepId, Closed),
+        ?assertEqual(<<"promoting">>, maps:get(<<"status">>, e({get, Id}))),
+        {ok, CP} = ae_store:checkpoint(Closed),
+        {ok, Promoted} = ae_store:promote(DepId, Closed, Desc, maps:get(<<"checkpoint_id">>, CP)),
+        ok = e({set_mode, false}),
+        ?assertEqual({error, quiescing}, ae_store:authorized(auth_route(Promoted))),
+        {ok, _} = e({request_cancel, Id, <<"evolution_disabled">>}),
+        ?assertEqual({error, evolution_disabled_or_cancelled}, ae_store:complete(DepId, Promoted)),
+        ok = ae_store:starting_rollback(DepId, <<"evolution_disabled">>),
+        ok = ae_store:starting_rollback(DepId, <<"repeated">>),
+        gen_server:stop(ae_store), {ok, _} = ae_store:start_link(get(test_root)),
+        ?assertEqual(<<"rollback">>, maps:get(<<"status">>, e({get, Id}))),
+        ?assertMatch({rollback, #{<<"id">> := DepId}}, ae_store:recover_handoff()),
+        {ok, RollbackBase} = ae_store:quiesce(ae_store:routing(), null), {ok, Latest} = ae_store:checkpoint(RollbackBase),
+        Prior = #{<<"slot">> => <<"adam">>, <<"runtime_instance_id">> => <<"restored">>, <<"artifact">> => maps:get(<<"artifact">>, Base)},
+        {ok, Restored} = ae_store:rollback(DepId, RollbackBase, Prior, maps:get(<<"checkpoint_id">>, Latest), <<"disabled">>),
+        ?assertEqual(3, maps:get(<<"epoch">>, Restored)),
+        ?assertEqual(ok, ae_store:authorized(auth_route(Restored))),
+        ?assertEqual(false, e(mode)), ?assertEqual(undefined, e(active))
+    end).
+
+orchestrator_recovery_cancels_unknown_work_without_refund_test() ->
+    with_store(fun(Base, Auth) ->
+        {Id, _} = built_job(Base, Auth),
+        {ok, _} = e({reserve_evaluation, Id, 1, 1000, 1000, evaluation_binding(), evaluation_configuration()}),
+        Before = e({get, Id}),
+        try
+            {ok, _} = ae_evolution:start_link(#{}),
+            wait_engine_idle(erlang:monotonic_time(millisecond) + 2000),
+            After = e({get, Id}),
+            ?assertEqual(<<"cancelled">>, maps:get(<<"status">>, After)),
+            ?assertEqual(<<"evolution_owner_restarted">>, maps:get(<<"reason">>, After)),
+            ?assertEqual(maps:get(<<"executions">>, Before), maps:get(<<"executions">>, After)),
+            ?assertEqual(2000, maps:get(<<"reserved_cpu_ms">>, After)),
+            gen_statem:stop(ae_evolution),
+            {ok, _} = ae_evolution:start_link(#{}),
+            wait_engine_idle(erlang:monotonic_time(millisecond) + 2000),
+            ?assertEqual(After, e({get, Id})),
+            ?assertEqual({error, evolution_disabled}, ae_evolution:trigger(<<"new">>, <<"improve">>))
+        after
+            case whereis(ae_evolution) of undefined -> ok; Pid -> gen_statem:stop(Pid) end
+        end
+    end).
+wait_engine_idle(Deadline) ->
+    case ae_evolution:status() of
+        #{<<"state">> := <<"disabled">>, <<"job_id">> := null} -> ok;
+        _ -> ?assert(erlang:monotonic_time(millisecond) < Deadline),
+            receive after 10 -> wait_engine_idle(Deadline) end
+    end.
+
+auth_route(Route) -> {maps:get(<<"slot">>, Route), maps:get(<<"runtime_instance_id">>, Route), maps:get(<<"epoch">>, Route)}.
+staged_job(Base, Auth) ->
+    {Id, Built} = built_job(Base, Auth), Evaluated = evaluated_job(Id, Built),
+    Candidate = maps:get(<<"built_artifact">>, Built),
+    {ok, Dep} = new_evolution_deployment(Base, Id, Candidate, handoff_limits()),
+    Desc = #{<<"slot">> => <<"eve">>, <<"runtime_instance_id">> => <<"candidate">>, <<"artifact">> => Candidate},
+    Checks = #{<<"protocol_v1">> => true, <<"schema_v1">> => true, <<"synthetic_turn">> => true,
+        <<"production_tools">> => false, <<"reply_digest">> => binary:copy(<<"d">>, 64)},
+    {ok, Staged} = ae_store:staged(maps:get(<<"id">>, Dep), Desc,
+        #{<<"staging">> => Checks, <<"independent">> => maps:get(<<"1">>, maps:get(<<"evaluations">>, Evaluated))}),
+    {Id, Staged, Desc}.
+
 built_job(Base, Auth) -> built_job(Base, Auth, limits()).
 built_job(Base, Auth, Limits) ->
     {ok, Job} = e({create, Base, <<"evaluation-test">>, <<"improve">>, Limits}), Id = maps:get(<<"id">>, Job),

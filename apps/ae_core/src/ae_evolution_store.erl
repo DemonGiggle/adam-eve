@@ -16,6 +16,34 @@ dispatch(Db, {create, Expected, Origin, Objective, Limits}) ->
         [] -> create(Db, Expected, Origin, Objective, Limits)
     end;
 dispatch(Db, {get, Id}) -> get(Db, Id);
+dispatch(Db, {find_origin, Origin}) ->
+    need(text(Origin, 256), invalid_objective),
+    case ae_sql:rows(Db, "SELECT data FROM evolution_jobs WHERE origin_ref=?", [Origin]) of
+        [] -> undefined; [{Data}] -> jsx:decode(Data, [return_maps]) end;
+dispatch(Db, mode) ->
+    case ae_sql:rows(Db, "SELECT data FROM control WHERE name='evolution_enabled'", []) of
+        [] -> true; [{Data}] -> jsx:decode(Data) end;
+dispatch(Db, {set_mode, Value}) when is_boolean(Value) ->
+    ae_sql:exec(Db, "INSERT OR REPLACE INTO control VALUES('evolution_enabled',?)", [jsx:encode(Value)]),
+    case {Value, active(Db)} of
+        {false, Job} when is_map(Job) -> close_candidate_admission(Db, Job);
+        _ -> ok end,
+    event(Db, <<"evolution_mode_changed">>, #{<<"enabled">> => Value}), ok;
+dispatch(Db, {request_cancel, Id, Reason}) ->
+    Job = must_get(Db, Id), need(text(Reason, 256), invalid_cancellation_reason),
+    case {terminal(Job), maps:is_key(<<"deployment_id">>, Job)} of
+        {true, _} -> {ok, Job};
+        {false, false} -> finish(Db, Job, <<"cancelled">>, Reason), {ok, get(Db, Id)};
+        {false, true} ->
+            New = Job#{<<"cancel_requested">> => true, <<"cancellation_reason">> => Reason},
+            close_candidate_admission(Db, Job), save(Db, New),
+            event(Db, <<"evolution_cancel_requested">>, #{<<"job_id">> => Id, <<"reason">> => Reason}), {ok, New}
+    end;
+dispatch(Db, {degraded, Id, Reason}) ->
+    Job = must_get(Db, Id), need(not terminal(Job) andalso maps:is_key(<<"deployment_id">>, Job), invalid_job_state),
+    close_candidate_admission(Db, Job),
+    New = Job#{<<"status">> := <<"degraded">>, <<"reason">> => Reason}, save(Db, New),
+    event(Db, <<"evolution_degraded">>, #{<<"job_id">> => Id, <<"reason">> => Reason}), {ok, New};
 dispatch(Db, active) -> active(Db);
 dispatch(Db, {reserve_staging, Id, RuntimeLimits}) ->
     Job = must_get(Db, Id), need(current(Db, Job) =:= ok, stale_or_expired_job),
@@ -54,6 +82,7 @@ dispatch(Db, {for_deployment, Id, Expected}) ->
     {ok, Job, evaluation_record(Job)};
 dispatch(Db, {check_deployment, Deployment}) ->
     Job = must_get(Db, maps:get(<<"evolution_job">>, Deployment)),
+    need(dispatch(Db, mode) andalso not maps:get(<<"cancel_requested">>, Job, false), evolution_disabled_or_cancelled),
     need(current(Db, Job) =:= ok, stale_or_expired_job),
     need(maps:get(<<"deployment_id">>, Job, null) =:= maps:get(<<"id">>, Deployment), deployment_mismatch),
     check_deployment(Job, Deployment), ok;
@@ -345,11 +374,13 @@ authorized(Db, {Slot, Instance, Epoch}, Id) ->
     end;
 authorized(_, _, _) -> {error, stale_runtime}.
 current(Db, Job) ->
-    case terminal(Job) of
-        true -> job_finished;
-        false ->
+    case {terminal(Job), dispatch(Db, mode) andalso not maps:get(<<"cancel_requested">>, Job, false)} of
+        {true, _} -> job_finished;
+        {false, false} -> evolution_disabled_or_cancelled;
+        {false, true} ->
             Expected = case maps:get(<<"status">>, Job) of
-                <<"observing">> -> maps:get(<<"promoted_route">>, Job);
+                Phase when Phase =:= <<"observing">>; Phase =:= <<"rollback">>; Phase =:= <<"degraded">> ->
+                    maps:get(<<"promoted_route">>, Job, maps:get(<<"baseline">>, Job));
                 _ -> maps:get(<<"baseline">>, Job) end,
             case ae_policy:same_baseline(route(Db), Expected) of
             false -> stale_baseline;
@@ -361,6 +392,13 @@ cancel_unlinked(Db, Job, Reason) ->
         true -> ok;
         false -> finish(Db, Job, <<"cancelled">>, Reason)
     end.
+close_candidate_admission(Db, Job) ->
+    case maps:find(<<"promoted_route">>, Job) of
+        {ok, Promoted} ->
+            case ae_policy:same_baseline(route(Db), Promoted) of
+                true -> ae_sql:exec(Db, "UPDATE routing SET data=? WHERE id=1", [jsx:encode((route(Db))#{<<"admission">> => <<"closed">>})]);
+                false -> ok end;
+        error -> ok end.
 finish_staging(Job, Status) ->
     Executions = maps:get(<<"executions">>, Job), Key = execution_key(maps:get(<<"attempts">>, Job), <<"stage">>),
     case maps:get(Key, Executions, undefined) of

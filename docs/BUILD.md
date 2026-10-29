@@ -65,8 +65,9 @@ toolchain compatibility and pinned recipe/dependency hashes. Its `authoring` is
 ordinary deployment rejects generated artifacts with
 `independent_evaluation_required`. The supervised independent evaluator is
 documented in [EVALUATION.md](EVALUATION.md). Job-bound generated staging and
-manual approval are implemented; the orchestration state machine and CLI trigger
-are still required before enabling self-evolution.
+manual approval are connected through the evolution state machine and CLI trigger
+described in [EVOLUTION.md](EVOLUTION.md). Complete explicit configuration and
+restricted execution are required to enable evolution.
 Missing isolation never falls back to the manual host compiler.
 
 Configure the internal builder through `AE_BUILD_CONFIG_JSON`. Every field is

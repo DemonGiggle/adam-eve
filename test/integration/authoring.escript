@@ -7,10 +7,25 @@ main([Scenario, LimitsPath]) ->
     application:set_env(ae_core, config, Config),
     {ok, _} = application:ensure_all_started(ae_core),
     {ok, Encoded} = file:read_file(LimitsPath), Limits = jsx:decode(Encoded, [return_maps]),
-    {ok, Job} = ae_store:evolution({create, ae_store:routing(), list_to_binary(Scenario),
-        <<"Improve the greeting; preserve existing behavior.">>, Limits}),
+    Created = case Scenario of
+        "orchestrated-rollback" ->
+            wait_engine(erlang:monotonic_time(millisecond) + 10000),
+            ae_evolution:trigger(list_to_binary(Scenario), <<"Improve the greeting; preserve existing behavior.">>);
+        _ -> ae_store:evolution({create, ae_store:routing(), list_to_binary(Scenario),
+            <<"Improve the greeting; preserve existing behavior.">>, Limits}) end,
+    {ok, Job} = Created,
     Id = maps:get(<<"id">>, Job),
     Result = case Scenario of
+        "orchestrated-rollback" ->
+            wait_phase(Id, [<<"testing">>, <<"evaluated">>, <<"staging">>, <<"awaiting_approval">>],
+                erlang:monotonic_time(millisecond) + maps:get(<<"total_ms">>, Limits)),
+            {ok, <<"conversation still works">>} = ae_router:turn(<<"orchestrated-during-eval">>, <<"test">>, <<"hello">>),
+            wait_phase(Id, [<<"awaiting_approval">>], erlang:monotonic_time(millisecond) + maps:get(<<"total_ms">>, Limits)),
+            {ok, EJob} = ae_evolution:job(Id),
+            Summary = #{<<"evolution_job">> => Id, <<"deployment_id">> => maps:get(<<"deployment_id">>, EJob),
+                <<"approval_binding">> => maps:get(<<"approval_binding">>, EJob)},
+            R = deploy_and_rollback(Id, Summary), ok = ae_evolution:set_enabled(false),
+            {error, evolution_disabled} = ae_evolution:trigger(<<"disabled-trigger">>, <<"must not run">>), R;
         "cache" -> check_cache(Id);
         "builder-unavailable" ->
             {ok, _} = ae_router:author(Id),
@@ -74,8 +89,10 @@ main([Scenario, LimitsPath]) ->
         <<"status">> => ae_router:status()}), "\n"]),
     application:stop(ae_core).
 deploy_and_rollback(Id) ->
-    Base = ae_store:routing(),
     {ok, Summary} = ae_deployment:stage_evolution(Id),
+    deploy_and_rollback(Id, Summary).
+deploy_and_rollback(Id, Summary) ->
+    Base = ae_store:routing(),
     Id = maps:get(<<"evolution_job">>, Summary), DepId = maps:get(<<"deployment_id">>, Summary),
     {error, approval_mismatch} = ae_deployment:approve(DepId, <<"wrong-evaluation-approval">>),
     Base = ae_store:routing(),
@@ -92,6 +109,20 @@ deploy_and_rollback(Id) ->
     [#{<<"text">> := <<"conversation still works">>}] = [Result || {_, <<"tool_result">>,
         #{<<"request_id">> := <<"candidate-ack">>, <<"key">> := <<"llm">>, <<"result">> := Result}} <- ae_store:events()],
     {ok, #{<<"rolled_back">> => true, <<"acknowledged_reply_retained">> => true}}.
+wait_engine(Deadline) ->
+    case ae_evolution:status() of
+        #{<<"state">> := <<"recovering">>} -> true = erlang:monotonic_time(millisecond) < Deadline,
+            receive after 20 -> wait_engine(Deadline) end;
+        _ -> ok end.
+wait_phase(Id, Phases, Deadline) ->
+    Job = ae_store:evolution({get, Id}), Status = maps:get(<<"status">>, Job),
+    case lists:member(Status, Phases) of
+        true -> ok;
+        false ->
+            false = lists:member(Status, [<<"rejected">>, <<"cancelled">>, <<"degraded">>]),
+            true = erlang:monotonic_time(millisecond) < Deadline,
+            receive after 50 -> wait_phase(Id, Phases, Deadline) end
+    end.
 wait_rollback(Id, Deadline) ->
     case ae_store:evolution({get, Id}) of
         #{<<"status">> := <<"rolled_back">>} -> ok;

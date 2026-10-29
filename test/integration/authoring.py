@@ -33,7 +33,7 @@ class Provider(BaseHTTPRequestHandler):
             last = body["messages"][-1]["content"]
             if self.scenario != "cache":
                 last = json.loads(last)
-            step = (len(self.requests) - 1) % 3 + 1 if self.scenario == "repair" else len(self.requests)
+            step = (len(self.requests) - 1) % 3 + 1 if self.scenario in ("repair", "orchestrated-rollback") else len(self.requests)
             if self.scenario == "cache":
                 assert len(self.requests) == 1 and last == "cache-test"
                 action = {"cache": "fixture result"}
@@ -51,7 +51,12 @@ class Provider(BaseHTTPRequestHandler):
             elif step == 3:
                 assert "-module(seed_agent)." in last["content_utf8"] and last["eof"] is False
                 assert "job_id" in last and "base_source_revision" in last
-                action = {"action": "proposal", "patch": self.patch, "hypothesis": "clearer greeting",
+                patch = self.patch
+                if self.scenario == "orchestrated-rollback" and len(self.requests) == 3:
+                    patch = ("diff --git a/apps/ae_seed/src/seed_agent.erl b/apps/ae_seed/src/seed_agent.erl\n"
+                        "--- a/apps/ae_seed/src/seed_agent.erl\n+++ b/apps/ae_seed/src/seed_agent.erl\n"
+                        "@@ -1 +1 @@\n--module(seed_agent).\n+-module(seed_agent). invalid_erlang\n")
+                action = {"action": "proposal", "patch": patch, "hypothesis": "clearer greeting",
                           "expected_benefit": "friendlier response", "risks": ["regression"],
                           "requested_tests": ["contract", "replay"]}
             else:
@@ -92,10 +97,10 @@ def main():
         try:
             scenarios = ["success", "protected", "budget", "invalid", "missing-usage", "over-budget", "cache", "repair", "builder-unavailable"]
             if os.environ.get("AE_TEST_CGROUP_ROOT"):
-                scenarios.extend(["builder-success", "evaluator-success", "evaluator-unavailable", "deployment-rollback"])
+                scenarios.extend(["builder-success", "evaluator-success", "evaluator-unavailable", "deployment-rollback", "orchestrated-rollback"])
             if os.environ.get("AE_TEST_AUTHORING_SCENARIOS"):
                 scenarios = os.environ["AE_TEST_AUTHORING_SCENARIOS"].split(",")
-                assert all(s in {"success", "protected", "budget", "invalid", "missing-usage", "over-budget", "cache", "repair", "builder-unavailable", "builder-success", "evaluator-success", "evaluator-unavailable", "deployment-rollback"} for s in scenarios)
+                assert all(s in {"success", "protected", "budget", "invalid", "missing-usage", "over-budget", "cache", "repair", "builder-unavailable", "builder-success", "evaluator-success", "evaluator-unavailable", "deployment-rollback", "orchestrated-rollback"} for s in scenarios)
             original_patch = Provider.patch
             for scenario in scenarios:
                 print("Authoring scenario: " + scenario, flush=True)
@@ -103,7 +108,7 @@ def main():
                 Provider.requests = []
                 Provider.conversation_requests = 0
                 Provider.patch = original_patch
-                if scenario.startswith(("evaluator-", "deployment-")):
+                if scenario.startswith(("evaluator-", "deployment-", "orchestrated-")):
                     path = "apps/ae_seed/src/seed_agent.erl"
                     source = (CHECKOUT / path).read_text()
                     changed = source.replace('<<"text">> => Text, <<"event_refs">> => []',
@@ -112,21 +117,23 @@ def main():
                     Provider.patch = f"diff --git a/{path} b/{path}\n" + "".join(difflib.unified_diff(
                         source.splitlines(True), changed.splitlines(True), fromfile="a/" + path, tofile="b/" + path))
                 policy = {**limits, "max_llm_calls": 1} if scenario == "budget" else limits
-                if scenario == "repair":
+                if scenario in ("repair", "orchestrated-rollback"):
                     policy = {**limits, "max_llm_calls": 8, "max_tokens": 262144}
-                if scenario in ("builder-success", "evaluator-success", "evaluator-unavailable", "deployment-rollback"):
+                if scenario in ("builder-success", "evaluator-success", "evaluator-unavailable", "deployment-rollback", "orchestrated-rollback"):
                     wall_ms = int(os.environ.get("AE_TEST_BUILD_WALL_MS", "20000"))
                     cpu_ms = int(os.environ.get("AE_TEST_BUILD_CPU_MS", "10000"))
                     policy = {**limits, "total_ms": wall_ms * 3, "build_ms": wall_ms, "cpu_ms": cpu_ms * 3}
-                if scenario.startswith(("evaluator-", "deployment-")):
+                if scenario.startswith(("evaluator-", "deployment-", "orchestrated-")):
                     evaluation_wall = int(os.environ.get("AE_TEST_EVAL_WALL_MS", "180000"))
                     evaluation_cpu = int(os.environ.get("AE_TEST_EVAL_CPU_MS", "60000"))
                     policy.update({"total_ms": wall_ms * 2 + evaluation_wall * 2,
                         "evaluation_ms": evaluation_wall, "cpu_ms": cpu_ms + evaluation_cpu * 2})
+                if scenario == "orchestrated-rollback":
+                    policy.update({"max_llm_calls": 8, "max_tokens": 262144})
                 limit_file = root / "limits.json"
                 limit_file.write_text(json.dumps(policy))
                 extra_env = {}
-                if scenario in ("builder-unavailable", "builder-success", "evaluator-success", "evaluator-unavailable", "deployment-rollback"):
+                if scenario in ("builder-unavailable", "builder-success", "evaluator-success", "evaluator-unavailable", "deployment-rollback", "orchestrated-rollback"):
                     if scenario == "builder-unavailable":
                         fake = root / "fake-cgroup"
                         fake.mkdir()
@@ -139,7 +146,7 @@ def main():
                         "sandbox_limits": {"memory_bytes": 536870912, "pids": 32, "cpu_percent": 100,
                             "cpu_seconds": (cpu_ms + 999) // 1000, "address_space_bytes": 1073741824, "file_bytes": 33554432,
                             "open_files": 128, "output_bytes": 16777216, "wall_ms": wall_ms}})
-                if scenario.startswith(("evaluator-", "deployment-")):
+                if scenario.startswith(("evaluator-", "deployment-", "orchestrated-")):
                     sys.path.insert(0, str(CHECKOUT / "test/evaluation"))
                     import test_evaluate
                     evaluation = json.loads(extra_env["AE_BUILD_CONFIG_JSON"])
@@ -152,9 +159,11 @@ def main():
                         fake_evaluation.mkdir()
                         evaluation["cgroup_root"] = str(fake_evaluation)
                     extra_env["AE_EVAL_CONFIG_JSON"] = json.dumps(evaluation)
-                if scenario == "deployment-rollback":
+                if scenario in ("deployment-rollback", "orchestrated-rollback"):
                     extra_env.update({"AE_APPROVAL_TTL_MS": "120000", "AE_OBSERVE_MS": "60000",
                         "AE_HEALTH_INTERVAL_MS": "250", "AE_QUIESCE_TIMEOUT_MS": "5000"})
+                if scenario == "orchestrated-rollback":
+                    extra_env.update({"AE_EVOLUTION_ENABLED": "true", "AE_EVOLUTION_LIMITS_JSON": json.dumps(policy)})
                 result = subprocess.run(["escript", str(CHECKOUT / "test/integration/authoring.escript"), scenario, str(limit_file)],
                     cwd=CHECKOUT, env={**os.environ, "AE_DATA_ROOT": str(root), "AE_LLM_MODEL": "fixture",
                         "AE_LLM_URL": f"http://127.0.0.1:{server.server_port}/api/chat", **extra_env},
@@ -162,7 +171,7 @@ def main():
                 assert result.returncode == 0, result.stdout + result.stderr
                 output = json.loads(result.stdout.splitlines()[0])
                 assert output["conversation"]["ok"] == "conversation still works", output
-                assert Provider.conversation_requests == (4 if scenario == "deployment-rollback" else 2 if scenario.startswith("evaluator-") else 1)
+                assert Provider.conversation_requests == (4 if scenario in ("deployment-rollback", "orchestrated-rollback") else 2 if scenario.startswith("evaluator-") else 1)
                 assert output["status"]["evolution_enabled"] is False
                 job = output["job"]
                 assert job["reserved_tokens"] == job["llm_calls"] * policy["tokens_per_call"]
@@ -188,33 +197,41 @@ def main():
                     assert job["built_artifact"] == manifest
                     assert next(iter(job["executions"].values()))["status"] == "completed"
                     assert (root / "artifacts" / manifest["digest"] / "seed").is_file()
-                elif scenario.startswith(("evaluator-", "deployment-")):
-                    assert job["reserved_cpu_ms"] == (policy["cpu_ms"] if scenario == "deployment-rollback" else cpu_ms + evaluation_cpu), output
-                    if scenario == "deployment-rollback":
-                        stage = job["executions"]["1:stage"]
-                        assert stage["status"] == "completed" and stage["cpu_ms"] == policy["cpu_ms"] - cpu_ms - evaluation_cpu
+                elif scenario.startswith(("evaluator-", "deployment-", "orchestrated-")):
+                    assert job["reserved_cpu_ms"] == (policy["cpu_ms"] if scenario in ("deployment-rollback", "orchestrated-rollback") else cpu_ms + evaluation_cpu), output
+                    if scenario in ("deployment-rollback", "orchestrated-rollback"):
+                        stage = job["executions"][str(job["attempts"]) + ":stage"]
+                        assert stage["status"] == "completed" and stage["cpu_ms"] == policy["cpu_ms"] - cpu_ms * job["attempts"] - evaluation_cpu
                         assert stage["runtime_limits"]["pids"] <= policy["processes"]
                         assert stage["runtime_limits"]["memory_bytes"] <= policy["memory_bytes"]
                         assert stage["expires_at_ms"] <= job["deadline"]
-                    if scenario in ("evaluator-success", "deployment-rollback"):
-                        assert job["status"] == ("rolled_back" if scenario == "deployment-rollback" else "evaluated"), output
-                        scorecard = job["evaluations"]["1"]["scorecard"]
+                    if scenario in ("evaluator-success", "deployment-rollback", "orchestrated-rollback"):
+                        assert job["status"] == ("rolled_back" if scenario in ("deployment-rollback", "orchestrated-rollback") else "evaluated"), output
+                        scorecard = job["evaluations"][str(job["attempts"])]["scorecard"]
                         assert scorecard["passed"] is True and all(scorecard["gates"].values()), scorecard
                         assert scorecard["baseline"]["objective"]["rate_ppm"] == 0
                         assert scorecard["candidate"]["objective"]["rate_ppm"] == 1000000
-                        assert scorecard["configuration_hash"] == job["executions"]["1:evaluate"]["evaluation_binding"]["configuration_hash"]
-                        assert json.loads(job["executions"]["1:evaluate"]["evaluation_configuration"]) == evaluation
+                        assert scorecard["configuration_hash"] == job["executions"][str(job["attempts"]) + ":evaluate"]["evaluation_binding"]["configuration_hash"]
+                        assert json.loads(job["executions"][str(job["attempts"]) + ":evaluate"]["evaluation_configuration"]) == evaluation
                         assert job["built_artifact"]["evaluation"] is None
-                        assert len(Provider.requests) == 3, "Evaluator must not contact the live provider"
+                        assert len(Provider.requests) == (6 if scenario == "orchestrated-rollback" else 3), "Evaluator must not contact the live provider"
                     else:
                         assert output["result"]["error"] == "cgroup_v2_required", output
-                        assert job["status"] == "proposing" and job["executions"]["1:evaluate"]["status"] == "failed", output
+                        assert job["status"] == "proposing" and job["executions"][str(job["attempts"]) + ":evaluate"]["status"] == "failed", output
                 else:
                     expected = {"protected": "protected_source", "budget": "budget_exhausted",
                         "invalid": "invalid_authoring_response", "missing-usage": "provider_usage_missing",
                         "over-budget": "provider_budget_violation"}[scenario]
                     assert output["result"]["error"] == expected, output
                     assert job["attempts"] == 0
+                if scenario == "orchestrated-rollback":
+                    assert job["attempts"] == 2 and job["executions"]["1:build"]["status"] == "failed", job
+                    restarted = subprocess.run(["escript", str(CHECKOUT / "test/integration/evolution_restart.escript"), job["id"]],
+                        cwd=CHECKOUT, env={**os.environ, "AE_DATA_ROOT": str(root), "AE_LLM_MODEL": "fixture",
+                            "AE_LLM_URL": f"http://127.0.0.1:{server.server_port}/api/chat", **extra_env},
+                        text=True, capture_output=True, timeout=120)
+                    assert restarted.returncode == 0, restarted.stdout + restarted.stderr
+                    assert Provider.conversation_requests == 5
                 assert not list((root / "workspaces").iterdir())
                 with sqlite3.connect(root / "state/agent.sqlite3") as database:
                     turns = database.execute("SELECT request_id,message,reply,status FROM turns").fetchall()

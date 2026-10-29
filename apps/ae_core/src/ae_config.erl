@@ -19,7 +19,14 @@ load() ->
       max_tokens => integer_env("AE_LLM_MAX_TOKENS", 512, 1, 8192),
       context_turns => integer_env("AE_CONTEXT_TURNS", 8, 1, 8),
       max_llm_attempts => integer_env("AE_MAX_LLM_ATTEMPTS", 3, 1, 10),
-      handoff_limits => handoff_limits(), candidate_builder => candidate_builder(), candidate_evaluator => candidate_evaluator()}).
+      handoff_limits => handoff_limits(), candidate_builder => candidate_builder(), candidate_evaluator => candidate_evaluator(),
+      evolution_requested => os:getenv("AE_EVOLUTION_ENABLED") =:= "true", evolution_limits => evolution_limits()}).
+
+evolution_limits() ->
+    try
+        Limits = jsx:decode(list_to_binary(required("AE_EVOLUTION_LIMITS_JSON")), [return_maps, strict]),
+        {ok, Limits} = ae_evolution_limits:validate(Limits), Limits
+    catch _:_ -> undefined end.
 
 candidate_evaluator() ->
     try

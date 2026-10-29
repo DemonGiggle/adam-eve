@@ -77,6 +77,9 @@ checkpoint_and_approval_are_invalidated_test() ->
         {ok, Staged} = ae_store:staged(Id, Desc, #{}),
         {ok, _} = ae_store:approve(Id, ae_policy:binding(Staged)),
         {ok, Closed} = ae_store:quiesce(Base, Id),
+        ok = ae_store:preparing_promotion(Id, Closed),
+        gen_server:stop(ae_store), {ok, _} = ae_store:start_link(Root),
+        ?assertEqual(<<"promoting">>, maps:get(<<"status">>, ae_store:deployment(Id))),
         {ok, CP} = ae_store:checkpoint(Closed),
         %% An operator ledger mutation after the snapshot invalidates that high-watermark.
         {ok, _} = ae_store:checkpoint(Closed),

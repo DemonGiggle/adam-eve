@@ -1,14 +1,14 @@
-# Phase 2 foundations
+# Controlled evolution
 
 The durable authoring ledger, source reader, patch policy and an agent-side
 `seed_evolver` are implemented. An internal `ae_router:author/1` exchanges a
 controller-authorized job with the active runtime. The source/status and budgeted
 LLM broker capabilities are available only during that exchange, bound to its
-job, generation, authenticated runtime and epoch. There is no CLI evolution
-command yet, and `evolution_enabled` remains false. The orchestrating
-`ae_evolution` state machine and
-publication/retention recovery remain
-required before the Phase 2 exit criterion can be claimed.
+job, generation, authenticated runtime and epoch. The supervised `ae_evolution`
+state machine drives authoring, bounded repair, build, independent evaluation,
+and staging, then waits for explicit operator approval. Evolution is disabled by
+default. Publication/retention recovery coverage and successive live-model
+generations remain required before the Phase 2 exit criterion can be claimed.
 The fixed reproducible seed recipe is available separately; see [BUILD.md](BUILD.md).
 That guide also describes the supervised isolated builder, durable execution
 leases, and the gate that keeps its unevaluated output out of production.
@@ -30,8 +30,64 @@ restart and is never refunded. Memory/process limits are clamped to job limits;
 startup and the sandbox watchdog share the absolute lease deadline. Approval and
 observation cannot outlive that runtime lease. Promotion does not relax these
 limits: the same process retains its reserved lifetime quota, and any later
-ordinary recovery uses fresh runtime limits under a new epoch. Orchestration
-and the CLI trigger remain required before enabling evolution.
+ordinary recovery uses fresh runtime limits under a new epoch.
+
+## Operator commands and recovery
+
+Enabling requires `AE_EVOLUTION_ENABLED=true`, complete
+`AE_EVOLUTION_LIMITS_JSON`, `AE_BUILD_CONFIG_JSON` ([BUILD.md](BUILD.md)),
+`AE_EVAL_CONFIG_JSON` ([EVALUATION.md](EVALUATION.md)), and all four handoff
+timeouts (`AE_APPROVAL_TTL_MS`, `AE_OBSERVE_MS`, `AE_HEALTH_INTERVAL_MS`,
+`AE_QUIESCE_TIMEOUT_MS`). The runtime must use Bubblewrap with delegated cgroups
+and explicit sandbox limits as documented in [ISOLATION.md](ISOLATION.md).
+Missing or invalid evolution configuration leaves ordinary service available
+and makes a trigger return `evolution_disabled`; an operator enable request
+returns `evolution_not_configured`. There is no generated-code host fallback.
+
+The operator CLI accepts:
+
+```jsonl
+{"op":"evolve","origin_ref":"operator-change-1","objective":"Describe the bounded behavioral improvement."}
+{"op":"evolution"}
+{"op":"evolution","job_id":"<returned id>"}
+{"op":"evolution_cancel","job_id":"<job id>"}
+{"op":"evolution_enable","enabled":false}
+{"op":"evolution_enable","enabled":true}
+```
+
+The trigger returns the durable job. Reusing its origin with the same objective
+and limits returns that job, including after a terminal outcome, runtime fencing,
+or restart; changed objective/limits return `origin_conflict`. Use a new origin
+for a new improvement. Only one job or manual deployment can own the identity.
+Job inspection includes the source patch/lineage, exact artifact manifest,
+independent scorecard and rollback gate. Once standby checks pass, it also
+includes `deployment_id` and `approval_binding`. Inspect those and the retained
+source diff, then use the existing explicit approval command:
+
+```jsonl
+{"op":"approve","deployment_id":"<deployment_id>","approval_binding":"<approval_binding>"}
+```
+
+An ordinary turn may return busy during the bounded authoring exchange. The
+active runtime serves while separate build/evaluation workers run and while
+approval is pending. Approval does not reset any budget or lease deadline.
+
+Disable persists in SQLite across restart and requires an explicit re-enable.
+It stops further evolution reservations/approvals and cancels the active job.
+Before promotion this rejects standby output; during observation it closes
+candidate admission before restoring the predecessor under a fresh epoch.
+Ordinary service continues after cleanup, with acknowledged replies/results
+retained. Cancellation is asynchronous; inspect the job until its terminal
+outcome. A failed rollback leaves closed admission and a degraded job for
+operator inspection.
+
+On orchestrator restart, an unlinked job is cancelled without refund or automatic
+reissue of unknown work, surviving supervised workers are stopped, and an active
+author exchange is interrupted and fenced. Linked deployments are reconciled
+with the deployment manager: uncommitted promotions are rejected, incomplete
+observations roll back. Promotion restore and rollback intent are durable before
+checkpoint/replay. Retrying an already committed rollback does not stop the
+restored active runtime. Broader fault-injection coverage remains pending.
 
 ## Authoring path
 
@@ -76,8 +132,12 @@ Unix IPC, scoped Git source and a fixture HTTP provider. It verifies source
 pagination/ranges, structured patch submission, proposal/call deduplication,
 unknown-call denial, budget exhaustion, protected paths, prose-only rejection,
 required usage accounting, and continued conversation service. The accepted
-patch is data in the ledger; this test does not execute or promote generated
-code and does not establish live-model authoring quality.
+patch is data in the ledger in the native scenarios. With a delegated test
+cgroup root, optional scenarios execute restricted builds/evaluations and
+generated promotion/rollback. `orchestrated-rollback` uses the state machine to
+repair a real compile failure, reach explicit approval, preserve acknowledged
+work through candidate crash/rollback, and verify persistent disable/re-enable
+across restart. Fixture authoring does not establish live-model authoring quality.
 
 ## Ledger and budgets
 
@@ -87,8 +147,9 @@ jobs, proposal fingerprints/patch hashes, accepted attempts, and LLM reservation
 The ledger implements proposing, accepted-for-build, testing, evaluated, bounded
 repair, rejection, and cancellation. Supervised workers perform isolated builds
 and evaluations; linked deployment transitions cover staging, manual approval,
-quiescence, observation, completion, rejection, and rollback. The orchestration
-state machine and CLI trigger remain unfinished.
+quiescence, durable promotion/rollback intent, observation, completion, rejection,
+and rollback. The orchestrator observes these durable records and owns supervised
+workers; private test configuration remains unavailable to the authoring agent.
 
 Creating a job requires a trusted `origin_ref`, objective, the committed active
 slot/runtime/generation/source/epoch, and a complete validated limits map. There

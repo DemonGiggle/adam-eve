@@ -6,6 +6,7 @@
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
 -export([register_artifact/1, checkpoint/1, get_checkpoint/1, quiesce/2,
          new_deployment/3, new_evolution_deployment/5, staged/3, approve/2, reject/2, deployment/1,
+         preparing_promotion/2, starting_rollback/2,
          active_deployment/0, promote/4, rollback/5, complete/2, recover_handoff/0,
          activate_checkpoint/3, runtime_failed/2, evolution/1, recovery/0, verify_recovery/3]).
 
@@ -31,6 +32,8 @@ quiesce(Expected, Job) -> call({quiesce, Expected, Job}).
 new_deployment(Expected, Candidate, Limits) -> call({new_deployment, Expected, Candidate, Limits}).
 new_evolution_deployment(Expected, Id, Candidate, Limits, RuntimeLimits) ->
     call({new_evolution_deployment, Expected, Id, Candidate, Limits, RuntimeLimits}).
+preparing_promotion(Id, Expected) -> call({preparing_promotion, Id, Expected}).
+starting_rollback(Id, Reason) -> call({starting_rollback, Id, Reason}).
 staged(Id, Descriptor, Evaluation) -> call({staged, Id, Descriptor, Evaluation}).
 approve(Id, Binding) -> call({approve, Id, Binding}).
 reject(Id, Reason) -> call({reject, Id, Reason}).
@@ -324,8 +327,12 @@ dispatch({quiesce, Expected, Id}, Db) ->
     end,
     Closed = (route(Db))#{<<"admission">> => <<"closed">>},
     save_route(Db, Closed), event(Db, <<"admission_closed">>, #{<<"deployment_id">> => Id}), {ok, Closed};
+dispatch({preparing_promotion, Id, Expected}, Db) ->
+    Job = require_job(Db, Id, [<<"quiescing">>]), require_baseline(Db, Expected), require_unexpired(Job),
+    require_evolution(Db, Job), save_job(Db, Job#{<<"status">> := <<"promoting">>}),
+    event(Db, <<"promotion_restore_started">>, #{<<"deployment_id">> => Id}), ok;
 dispatch({promote, Id, Expected, Descriptor, Checkpoint}, Db) ->
-    Job = require_job(Db, Id, [<<"quiescing">>]), require_unexpired(Job),
+    Job = require_job(Db, Id, [<<"quiescing">>, <<"promoting">>]), require_unexpired(Job),
     require_evolution(Db, Job),
     require(now_ms() + maps:get(<<"observe_ms">>, maps:get(<<"limits">>, Job)) =<
         maps:get(<<"runtime_deadline">>, Job, maps:get(<<"evolution_deadline">>, Job, (1 bsl 63) - 1)), job_budget_exhausted),
@@ -340,8 +347,16 @@ dispatch({promote, Id, Expected, Descriptor, Checkpoint}, Db) ->
         <<"observe_until">> => now_ms() + maps:get(<<"observe_ms">>, maps:get(<<"limits">>, Job))},
     save_route(Db, New), save_job(Db, Observing),
     event(Db, <<"routing_promoted">>, #{<<"deployment_id">> => Id, <<"routing">> => New}), {ok, New};
+dispatch({starting_rollback, Id, Reason}, Db) ->
+    Job = require_job(Db, Id, [<<"observing">>, <<"rollback">>]),
+    require_baseline(Db, maps:get(<<"promoted_route">>, Job)),
+    case maps:get(<<"status">>, Job) of
+        <<"rollback">> -> ok;
+        _ -> save_job(Db, Job#{<<"status">> := <<"rollback">>, <<"reason">> => Reason}),
+            event(Db, <<"rollback_restore_started">>, #{<<"deployment_id">> => Id, <<"reason">> => Reason}), ok
+    end;
 dispatch({rollback, Id, Expected, Descriptor, Checkpoint, Reason}, Db) ->
-    Job = require_job(Db, Id, [<<"observing">>]), require_baseline(Db, Expected),
+    Job = require_job(Db, Id, [<<"observing">>, <<"rollback">>]), require_baseline(Db, Expected),
     require(ae_policy:same_baseline(Expected, maps:get(<<"promoted_route">>, Job)), stale_routing),
     require_descriptor(Job, Descriptor, predecessor), require_checkpoint(Db, Checkpoint),
     New = new_route(Db, Expected, Descriptor, Checkpoint),
@@ -361,7 +376,7 @@ dispatch({deployment, Id}, Db) -> job(Db, Id);
 dispatch(active_deployment, Db) -> active_job(Db);
 dispatch(recover_handoff, Db) ->
     case active_job(Db) of
-        #{<<"status">> := <<"observing">>} = Job -> {rollback, Job};
+        #{<<"status">> := Phase} = Job when Phase =:= <<"observing">>; Phase =:= <<"rollback">> -> {rollback, Job};
         #{<<"id">> := Id} -> reject_job(Db, Id, <<"controller_restarted_before_promotion">>), normal;
         undefined -> normal
     end;
@@ -443,7 +458,7 @@ next_epoch(Db, Expected) ->
     max(maps:get(<<"epoch">>, Expected), Floor) + 1.
 admission(Db) -> case ae_sql:recovery_pending(Db) of true -> <<"closed">>; false -> <<"open">> end.
 reject_job(Db, Id, Reason) ->
-    Job = require_job(Db, Id, [<<"staging">>, <<"awaiting_approval">>, <<"approved">>, <<"quiescing">>]),
+    Job = require_job(Db, Id, [<<"staging">>, <<"awaiting_approval">>, <<"approved">>, <<"quiescing">>, <<"promoting">>]),
     case ae_policy:same_baseline(route(Db), maps:get(<<"baseline">>, Job)) of
         true -> save_route(Db, (route(Db))#{<<"admission">> => admission(Db)});
         false -> ok end,

@@ -1,6 +1,6 @@
 -module(ae_deployment).
 -behaviour(gen_statem).
--export([start_link/1, stage/1, stage_evolution/1, approve/2, reject/1]).
+-export([start_link/1, stage/1, stage_evolution/1, approve/2, reject/1, abort/2]).
 -export([init/1, callback_mode/0, handle_event/4, terminate/3]).
 
 start_link(Config) -> gen_statem:start_link({local, ?MODULE}, ?MODULE, Config, []).
@@ -8,6 +8,7 @@ stage(Digest) -> gen_statem:call(?MODULE, {stage, {manual, Digest}}, 80000).
 stage_evolution(Id) -> gen_statem:call(?MODULE, {stage, {evolution, Id}}, 80000).
 approve(Id, Binding) -> gen_statem:call(?MODULE, {approve, Id, Binding}, 410000).
 reject(Id) -> gen_statem:call(?MODULE, {reject, Id}, 10000).
+abort(Id, Reason) -> gen_statem:call(?MODULE, {abort, Id, Reason}, 175000).
 callback_mode() -> handle_event_function.
 
 init(Config) ->
@@ -51,6 +52,17 @@ handle_event({call, From}, {approve, Id, Binding}, awaiting_approval, #{job := I
 handle_event({call, From}, {reject, Id}, awaiting_approval, #{job := Id} = Data) ->
     Reply = ae_store:reject(Id, <<"operator_denied">>),
     {next_state, idle, release(Data, true), [{reply, From, Reply}]};
+handle_event({call, From}, {abort, Id, Reason}, awaiting_approval, #{job := Id} = Data) ->
+    Reply = ae_store:reject(Id, Reason), {next_state, idle, release(Data, true), [{reply, From, Reply}]};
+handle_event({call, From}, {abort, Id, Reason}, observing, #{job := Id} = Data) ->
+    {State, Next} = rollback(Data, Reason),
+    Reply = case State of idle -> ok; _ -> {error, rollback_failed} end,
+    {next_state, State, Next, [{reply, From, Reply}]};
+handle_event({call, From}, {abort, Id, _}, _, _) ->
+    Reply = case ae_store:deployment(Id) of
+        #{<<"status">> := Phase} when Phase =:= <<"completed">>; Phase =:= <<"rejected">>; Phase =:= <<"rolled_back">> -> ok;
+        _ -> {error, invalid_deployment_state} end,
+    {keep_state_and_data, [{reply, From, Reply}]};
 handle_event({call, From}, _, _, _) ->
     {keep_state_and_data, [{reply, From, {error, invalid_deployment_state}}]};
 handle_event(state_timeout, poll, awaiting_approval, Data) ->
@@ -66,9 +78,15 @@ handle_event(state_timeout, poll, awaiting_approval, Data) ->
     end;
 handle_event(state_timeout, poll, observing, Data) ->
     Job = ae_store:deployment(maps:get(job, Data)),
+    case maps:get(<<"status">>, Job) of
+        Phase when Phase =:= <<"rolled_back">>; Phase =:= <<"completed">>; Phase =:= <<"rejected">> ->
+            {next_state, idle, release(Data, false)};
+        <<"rollback">> -> rollback_result(Data, <<"resume_rollback">>);
+        _ ->
     case erlang:system_time(millisecond) < maps:get(<<"runtime_deadline">>, Job, maps:get(<<"evolution_deadline">>, Job, (1 bsl 63) - 1)) of
         false -> rollback_result(Data, <<"evolution_deadline">>);
         true -> observe(Job, Data)
+    end
     end;
 handle_event(cast, {runtime_failed, Id}, observing, #{job := Id} = Data) ->
     rollback_result(Data, <<"candidate_crashed">>);

@@ -1,6 +1,6 @@
 -module(ae_router).
 -behaviour(gen_server).
--export([start_link/1, turn/3, restart/0, status/0, promote/2, rollback/2, check/1, restore_ready/2, author/1]).
+-export([start_link/1, turn/3, restart/0, status/0, promote/2, rollback/2, check/1, restore_ready/2, author/1, cancel_author/1]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
 
 start_link(Config) -> gen_server:start_link({local, ?MODULE}, ?MODULE, Config, []).
@@ -14,6 +14,7 @@ rollback(Id, Reason) -> gen_server:call(?MODULE, {rollback, Id, Reason}, 65000).
 check(Expected) -> gen_server:call(?MODULE, {check, Expected}, 10000).
 restore_ready(BackupId, Origin) -> gen_server:call(?MODULE, {restore_ready, BackupId, Origin}, 15000).
 author(Id) -> gen_server:call(?MODULE, {author, Id}, 320000).
+cancel_author(Id) -> gen_server:call(?MODULE, {cancel_author, Id}, 65000).
 
 init(#{root := Root} = Config) ->
     ok = ae_runtime_sup:stop_all(),
@@ -72,7 +73,7 @@ handle_call({author, Id}, From, State) ->
                                 Parent ! {author_result, Ref, Reply}
                             end),
                             {noreply, State#{inflight := #{ref => Ref, worker => Worker, from => From,
-                                                           request => Id, auth => Auth}}};
+                                                           request => Id, auth => Auth, mode => author}}};
                         {ok, _} -> {reply, {error, invalid_job_state}, State};
                         Error -> {reply, Error, State}
                     end;
@@ -80,6 +81,11 @@ handle_call({author, Id}, From, State) ->
             end;
         _ -> {reply, {error, service_busy}, State}
     end;
+handle_call({cancel_author, Id}, _, #{inflight := #{request := Id, mode := author}} = State) ->
+    Stopped = stop_active(cancel_turn(State)),
+    try {reply, ok, boot_current(Stopped)}
+    catch _:_ -> {reply, {error, recovery_failed}, Stopped} end;
+handle_call({cancel_author, _}, _, State) -> {reply, ok, State};
 handle_call({restore_ready, BackupId, Origin}, _, State) ->
     Reply = case maps:get(runtime, State) of
         undefined -> {error, runtime_unavailable};
@@ -105,7 +111,7 @@ handle_call(status, _, State) ->
     Recovery = case ae_store:recovery() of undefined -> null; Record -> Record end,
     Reply = #{<<"routing">> => ae_store:routing(), <<"os_pid">> => maps:get(os_pid, State, null),
         <<"recovery">> => Recovery,
-        <<"runtime_health">> => Health, <<"evolution_enabled">> => false,
+        <<"runtime_health">> => Health, <<"evolution_enabled">> => ae_evolution:enabled(maps:get(config, State)),
         <<"runtime_isolation">> => atom_to_binary(maps:get(runtime_isolation, maps:get(config, State), development), utf8),
         <<"handoff_enabled">> => maps:get(handoff_limits, maps:get(config, State), undefined) =/= undefined,
         <<"deployment">> => ae_store:active_deployment(),
@@ -202,6 +208,7 @@ finish_handoff(#{handoff := #{from := From, id := Id, candidate := Candidate, ti
         #{config := #{root := Root}} = State,
         ok = ae_artifacts:verify(Root, maps:get(<<"candidate">>, Job)),
         Closed = ae_store:routing(),
+        ok = ae_store:preparing_promotion(Id, Closed),
         {ok, CP} = ae_store:checkpoint(Closed),
         ok = ae_runtime_worker:restore(Candidate, CP),
         ok = ae_runtime_worker:health(Candidate),
@@ -213,7 +220,7 @@ finish_handoff(#{handoff := #{from := From, id := Id, candidate := Candidate, ti
     catch _:_ ->
         Cleared = State#{handoff := undefined},
         Recovered = case {maps:get(runtime, Cleared), ae_store:deployment(Id)} of
-            {undefined, #{<<"status">> := <<"quiescing">>}} ->
+            {undefined, #{<<"status">> := Phase}} when Phase =:= <<"quiescing">>; Phase =:= <<"promoting">> ->
                 ae_store:reject(Id, <<"promotion_failed">>),
                 try boot_current(Cleared) catch _:_ -> Cleared end;
             _ -> Cleared
@@ -222,9 +229,20 @@ finish_handoff(#{handoff := #{from := From, id := Id, candidate := Candidate, ti
     end.
 
 restore_previous(Id, Reason, State) ->
+    case ae_store:deployment(Id) of
+        #{<<"status">> := <<"rolled_back">>, <<"rollback_route">> := Restored} ->
+            case ae_policy:same_baseline(Restored, ae_store:routing()) of
+                true -> {{ok, ae_store:routing()}, State};
+                false -> {{error, stale_rollback}, State} end;
+        #{<<"status">> := Phase} when Phase =:= <<"observing">>; Phase =:= <<"rollback">> ->
+            restore_previous_active(Id, Reason, State);
+        _ -> {{error, invalid_deployment_state}, State}
+    end.
+restore_previous_active(Id, Reason, State) ->
     Stopped = stop_active(cancel_turn(State)),
     try
         Job = ae_store:deployment(Id),
+        ok = ae_store:starting_rollback(Id, Reason),
         {ok, Closed} = ae_store:quiesce(ae_store:routing(), null),
         {ok, CP} = ae_store:checkpoint(Closed),
         Base = maps:get(<<"baseline">>, Job),
