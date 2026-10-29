@@ -31,7 +31,10 @@ init({Root, Routing, Config}) ->
         try
             ok = file:change_mode(Path, 8#600),
             {Executable, Args} = ae_sandbox:runtime(Root, Manifest, Directory, #{token => Token, config => Config}),
-            StartDeadline = erlang:monotonic_time(millisecond) + StartTimeout,
+            Remaining = min(StartTimeout, maps:get(runtime_deadline, Config, erlang:system_time(millisecond) + StartTimeout)
+                - erlang:system_time(millisecond)),
+            true = Remaining > 0,
+            StartDeadline = erlang:monotonic_time(millisecond) + Remaining,
             Port = open_port({spawn_executable, Executable},
                 [binary, exit_status, use_stdio, {env, ae_os:clean_env()},
                  {args, Args}]),

@@ -17,6 +17,36 @@ dispatch(Db, {create, Expected, Origin, Objective, Limits}) ->
     end;
 dispatch(Db, {get, Id}) -> get(Db, Id);
 dispatch(Db, active) -> active(Db);
+dispatch(Db, {reserve_staging, Id, RuntimeLimits}) ->
+    Job = must_get(Db, Id), need(current(Db, Job) =:= ok, stale_or_expired_job),
+    need(maps:get(<<"status">>, Job) =:= <<"evaluated">>, invalid_job_state),
+    Keys = [<<"memory_bytes">>, <<"pids">>, <<"cpu_percent">>, <<"cpu_seconds">>,
+        <<"address_space_bytes">>, <<"file_bytes">>, <<"open_files">>, <<"output_bytes">>, <<"wall_ms">>],
+    need(is_map(RuntimeLimits) andalso lists:sort(maps:keys(RuntimeLimits)) =:= lists:sort(Keys) andalso
+        lists:all(fun(V) -> is_integer(V) andalso V > 0 andalso V < (1 bsl 63) end, maps:values(RuntimeLimits)),
+        invalid_staging_limits),
+    Limits = maps:get(<<"limits">>, Job),
+    StageKey = execution_key(maps:get(<<"attempts">>, Job), <<"stage">>),
+    need(not maps:is_key(StageKey, maps:get(<<"executions">>, Job, #{})), execution_outcome_unknown),
+    Remaining = maps:get(<<"cpu_ms">>, Limits) - maps:get(<<"reserved_cpu_ms">>, Job, 0),
+    case Remaining > 0 of
+        false -> exhaust(Db, Job, <<"staging_cpu_budget">>);
+        true ->
+            Cpu = min(Remaining, maps:get(<<"cpu_seconds">>, RuntimeLimits) * 1000),
+            Wall = min(maps:get(<<"wall_ms">>, RuntimeLimits), maps:get(<<"deadline">>, Job) - now_ms()),
+            Attempt = maps:get(<<"attempts">>, Job),
+            case reserve_execution(Db, Job, Attempt, <<"stage">>, Cpu, Wall) of
+                {ok, Lease} when is_map(Lease) ->
+                    Effective = RuntimeLimits#{<<"cpu_seconds">> := (Cpu + 999) div 1000, <<"wall_ms">> := maps:get(<<"wall_ms">>, Lease),
+                        <<"memory_bytes">> := min(maps:get(<<"memory_bytes">>, RuntimeLimits), maps:get(<<"memory_bytes">>, Limits)),
+                        <<"pids">> := min(maps:get(<<"pids">>, RuntimeLimits), maps:get(<<"processes">>, Limits))},
+                    Bound = Lease#{<<"runtime_limits">> => Effective},
+                    Reserved = must_get(Db, Id), Executions = maps:get(<<"executions">>, Reserved),
+                    save(Db, Reserved#{<<"executions">> := Executions#{execution_key(Attempt, <<"stage">>) := Bound}}),
+                    {ok, Bound};
+                Error -> Error
+            end
+    end;
 dispatch(Db, {for_deployment, Id, Expected}) ->
     Job = must_get(Db, Id), need(current(Db, Job) =:= ok, stale_or_expired_job),
     need(ae_policy:same_baseline(Expected, maps:get(<<"baseline">>, Job)), stale_baseline),
@@ -39,8 +69,12 @@ dispatch(Db, {deployment_transition, Deployment}) ->
     end,
     Fields = maps:with([<<"promoted_route">>, <<"rollback_route">>, <<"reason">>, <<"approval_binding">>], Deployment),
     New = maps:merge(Job#{<<"status">> := Phase, <<"deployment_id">> => maps:get(<<"id">>, Deployment)}, Fields),
-    save(Db, New), event(Db, <<"evolution_transition">>, #{<<"job_id">> => Id, <<"status">> => Phase,
-        <<"deployment_id">> => maps:get(<<"id">>, Deployment)}), {ok, New};
+    Finished = case Phase of
+        <<"awaiting_approval">> -> finish_staging(New, <<"completed">>);
+        <<"rejected">> -> finish_staging(New, <<"failed">>);
+        _ -> New end,
+    save(Db, Finished), event(Db, <<"evolution_transition">>, #{<<"job_id">> => Id, <<"status">> => Phase,
+        <<"deployment_id">> => maps:get(<<"id">>, Deployment)}), {ok, Finished};
 dispatch(Db, {attempt, Id, Number}) ->
     case ae_sql:rows(Db, "SELECT data FROM evolution_proposals WHERE job_id=? AND attempt=?", [Id, Number]) of
         [] -> undefined; [{Data}] -> jsx:decode(Data, [return_maps]) end;
@@ -327,6 +361,12 @@ cancel_unlinked(Db, Job, Reason) ->
         true -> ok;
         false -> finish(Db, Job, <<"cancelled">>, Reason)
     end.
+finish_staging(Job, Status) ->
+    Executions = maps:get(<<"executions">>, Job), Key = execution_key(maps:get(<<"attempts">>, Job), <<"stage">>),
+    case maps:get(Key, Executions, undefined) of
+        #{<<"status">> := <<"reserved">>} = Lease ->
+            Job#{<<"executions">> := Executions#{Key := Lease#{<<"status">> := Status}}};
+        _ -> Job end.
 evaluation_record(Job) ->
     Attempt = maps:get(<<"attempts">>, Job),
     Record = maps:get(integer_to_binary(Attempt), maps:get(<<"evaluations">>, Job, #{}), undefined),
@@ -351,18 +391,19 @@ text_or_empty(V, Max) -> is_binary(V) andalso byte_size(V) =< Max.
 hex(V) -> is_binary(V) andalso re:run(V, <<"^[0-9a-f]{64}$">>, [{capture, none}]) =:= match.
 hex40(V) -> is_binary(V) andalso re:run(V, <<"^[0-9a-f]{40}$">>, [{capture, none}]) =:= match.
 
-reserve_execution(Db, Job, Attempt, Kind, CpuMs, WallMs) ->
+reserve_execution(Db, Job, Attempt, Kind, CpuMs, RequestedWall) ->
     Limits = maps:get(<<"limits">>, Job),
+    Started = now_ms(),
+    WallMs = case Kind of <<"stage">> -> min(RequestedWall, maps:get(<<"deadline">>, Job) - Started); _ -> RequestedWall end,
     need(is_integer(CpuMs) andalso CpuMs > 0 andalso is_integer(WallMs) andalso WallMs > 0, invalid_execution_budget),
-    Ceiling = case Kind of <<"build">> -> <<"build_ms">>; <<"evaluate">> -> <<"evaluation_ms">> end,
-    need(WallMs =< maps:get(Ceiling, Limits) andalso now_ms() + WallMs =< maps:get(<<"deadline">>, Job), invalid_execution_budget),
+    Ceiling = case Kind of <<"build">> -> <<"build_ms">>; <<"evaluate">> -> <<"evaluation_ms">>; <<"stage">> -> <<"total_ms">> end,
+    need(WallMs =< maps:get(Ceiling, Limits) andalso Started + WallMs =< maps:get(<<"deadline">>, Job), invalid_execution_budget),
     Key = execution_key(Attempt, Kind), Executions = maps:get(<<"executions">>, Job, #{}),
     case maps:get(Key, Executions, undefined) of
         undefined ->
             Reserved = maps:get(<<"reserved_cpu_ms">>, Job, 0),
             case Reserved + CpuMs =< maps:get(<<"cpu_ms">>, Limits) of
                 true ->
-                    Started = now_ms(),
                     Lease = #{<<"id">> => ae_policy:sha256(crypto:strong_rand_bytes(32)),
                         <<"job_id">> => maps:get(<<"id">>, Job), <<"attempt">> => Attempt, <<"kind">> => Kind,
                         <<"status">> => <<"reserved">>, <<"cpu_ms">> => CpuMs, <<"wall_ms">> => WallMs,

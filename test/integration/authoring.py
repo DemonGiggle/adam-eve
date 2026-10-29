@@ -189,7 +189,13 @@ def main():
                     assert next(iter(job["executions"].values()))["status"] == "completed"
                     assert (root / "artifacts" / manifest["digest"] / "seed").is_file()
                 elif scenario.startswith(("evaluator-", "deployment-")):
-                    assert job["reserved_cpu_ms"] == cpu_ms + evaluation_cpu, output
+                    assert job["reserved_cpu_ms"] == (policy["cpu_ms"] if scenario == "deployment-rollback" else cpu_ms + evaluation_cpu), output
+                    if scenario == "deployment-rollback":
+                        stage = job["executions"]["1:stage"]
+                        assert stage["status"] == "completed" and stage["cpu_ms"] == policy["cpu_ms"] - cpu_ms - evaluation_cpu
+                        assert stage["runtime_limits"]["pids"] <= policy["processes"]
+                        assert stage["runtime_limits"]["memory_bytes"] <= policy["memory_bytes"]
+                        assert stage["expires_at_ms"] <= job["deadline"]
                     if scenario in ("evaluator-success", "deployment-rollback"):
                         assert job["status"] == ("rolled_back" if scenario == "deployment-rollback" else "evaluated"), output
                         scorecard = job["evaluations"]["1"]["scorecard"]

@@ -15,6 +15,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 import unittest
 
 CHECKOUT = Path(__file__).resolve().parents[2]
@@ -36,6 +37,10 @@ def python_mounts():
 
 @unittest.skipUnless(platform.system() == "Linux" and platform.machine() == "x86_64", "Linux x86_64 backend")
 class BoundaryTests(unittest.TestCase):
+    def test_expired_deadline_never_starts_a_process(self):
+        with self.assertRaisesRegex(sandbox.Unavailable, "sandbox_deadline_expired"):
+            sandbox.run(Path("/nonexistent-cgroup"), LIMITS, ["/bin/false"], deadline_ms=1)
+
     def test_required_limits_and_kernel_cgroup_files(self):
         with self.assertRaises(sandbox.Unavailable):
             sandbox.validate_limits({})
@@ -166,6 +171,17 @@ print(json.dumps({{"boundary": "ok"}}))
 
 @unittest.skipUnless(os.getenv("AE_TEST_CGROUP_ROOT"), "requires an explicitly delegated cgroup v2 test root")
 class DelegatedCgroupTests(unittest.TestCase):
+    def test_absolute_deadline_caps_the_configured_wall_allowance(self):
+        root = Path(os.environ["AE_TEST_CGROUP_ROOT"])
+        before = set(root.glob("ae-*"))
+        started = time.monotonic()
+        code, _, reason = sandbox.run(root, {**LIMITS, "wall_ms": 30000}, ["/bin/sleep", "30"],
+            deadline_ms=time.time_ns() // 1000000 + 1500)
+        self.assertNotEqual(code, 0)
+        self.assertEqual(reason, "sandbox_timeout")
+        self.assertLess(time.monotonic() - started, 5)
+        self.assertEqual(set(root.glob("ae-*")), before)
+
     def test_aggregate_cpu_and_process_budgets(self):
         root = Path(os.environ["AE_TEST_CGROUP_ROOT"])
         _, _, reason = sandbox.run(root, LIMITS, ["/usr/bin/python3", "-c", "while True: pass"],

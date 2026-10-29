@@ -66,7 +66,7 @@ handle_event(state_timeout, poll, awaiting_approval, Data) ->
     end;
 handle_event(state_timeout, poll, observing, Data) ->
     Job = ae_store:deployment(maps:get(job, Data)),
-    case erlang:system_time(millisecond) < maps:get(<<"evolution_deadline">>, Job, (1 bsl 63) - 1) of
+    case erlang:system_time(millisecond) < maps:get(<<"runtime_deadline">>, Job, maps:get(<<"evolution_deadline">>, Job, (1 bsl 63) - 1)) of
         false -> rollback_result(Data, <<"evolution_deadline">>);
         true -> observe(Job, Data)
     end;
@@ -114,13 +114,18 @@ stage_candidate(Request, Limits, #{config := #{root := Root} = Config} = Data) -
         ok = ae_artifacts:verify_parent(Root, Manifest, maps:get(<<"artifact">>, Base)),
         Created = case Request of
             {manual, _} -> ae_store:new_deployment(Base, Manifest, Limits);
-            {evolution, EId} -> ae_store:new_evolution_deployment(Base, EId, Manifest, Limits) end,
+            {evolution, EId} -> ae_store:new_evolution_deployment(Base, EId, Manifest, Limits, maps:get(sandbox_limits, Config)) end,
         case Created of
             {ok, Job} ->
                 Id = maps:get(<<"id">>, Job),
                 Spec = #{<<"slot">> => maps:get(<<"target_slot">>, Job), <<"artifact">> => Manifest},
                 try
-                    {ok, Candidate} = ae_runtime_sup:start_runtime(Root, Spec, Config),
+                    RuntimeConfig = case maps:find(<<"staging_execution">>, Job) of
+                        {ok, Lease} -> Config#{sandbox_limits := maps:get(<<"runtime_limits">>, Lease),
+                            runtime_cpu_budget_ms => maps:get(<<"cpu_ms">>, Lease),
+                            runtime_deadline => maps:get(<<"expires_at_ms">>, Lease)};
+                        error -> Config end,
+                    {ok, Candidate} = ae_runtime_sup:start_runtime(Root, Spec, RuntimeConfig),
                     try
                         ok = ae_runtime_worker:health(Candidate),
                         {ok, Reply} = ae_runtime_worker:simulate(Candidate),
@@ -149,7 +154,7 @@ summary(Job, #{candidate_os_pid := OsPid}) ->
 poll(#{config := #{handoff_limits := Limits}, job := Id}) ->
     Job = ae_store:deployment(Id),
     Deadline = case maps:get(<<"status">>, Job) of
-        <<"observing">> -> maps:get(<<"evolution_deadline">>, Job, (1 bsl 63) - 1);
+        <<"observing">> -> maps:get(<<"runtime_deadline">>, Job, maps:get(<<"evolution_deadline">>, Job, (1 bsl 63) - 1));
         _ -> maps:get(<<"expires_at">>, Job) end,
     Wait = max(1, min(maps:get(<<"health_interval_ms">>, Limits), Deadline - erlang:system_time(millisecond))),
     [{state_timeout, Wait, poll}].

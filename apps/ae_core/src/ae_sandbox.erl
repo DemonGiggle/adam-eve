@@ -13,9 +13,13 @@ runtime(Root, Manifest, Directory, #{token := Token, config := Config}) ->
         bubblewrap ->
             #{sandbox_cgroup_root := CgroupRoot, sandbox_limits := Limits} = Config,
             Helper = filename:join(code:priv_dir(ae_core), "ae_sandbox.py"),
+            Budget = case maps:find(runtime_cpu_budget_ms, Config) of
+                {ok, Cpu} -> ["--cpu-budget-ms", integer_to_list(Cpu)]; error -> [] end,
+            Deadline = case maps:find(runtime_deadline, Config) of
+                {ok, At} -> ["--deadline-ms", integer_to_list(At)]; error -> [] end,
             {"/usr/bin/python3", [Helper, "--cgroup-root", CgroupRoot,
                 "--limits-json", binary_to_list(jsx:encode(Limits)),
                 "--runtime", ae_artifacts:executable(Root, Manifest),
                 "--digest", binary_to_list(maps:get(<<"digest">>, Manifest)),
-                "--ipc-dir", Directory, "--token", binary_to_list(Token)]}
+                "--ipc-dir", Directory, "--token", binary_to_list(Token)] ++ Budget ++ Deadline}
     end.

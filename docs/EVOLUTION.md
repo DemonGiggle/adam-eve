@@ -24,9 +24,14 @@ the routing/store transaction, including observation completion and rollback.
 Approval expiry is capped by the job deadline, and promotion must leave enough
 budget for observation. Authoring remains bound to the original author, even
 after the candidate has become active.
-Staged runtimes currently use the explicit runtime sandbox ceilings and bounded
-approval/job lifetimes. Charging that runtime against the job's aggregate CPU
-reservation is still required alongside orchestration before enabling evolution.
+Before staging, the store reserves the lesser of the remaining aggregate job
+CPU budget and the configured runtime CPU ceiling. The reservation survives
+restart and is never refunded. Memory/process limits are clamped to job limits;
+startup and the sandbox watchdog share the absolute lease deadline. Approval and
+observation cannot outlive that runtime lease. Promotion does not relax these
+limits: the same process retains its reserved lifetime quota, and any later
+ordinary recovery uses fresh runtime limits under a new epoch. Orchestration
+and the CLI trigger remain required before enabling evolution.
 
 ## Authoring path
 

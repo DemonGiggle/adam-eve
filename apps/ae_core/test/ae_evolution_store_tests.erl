@@ -162,13 +162,13 @@ small_feedback_budget_still_retains_scorecard_test() ->
 evaluated_artifact_approval_and_rollback_are_linked_test() ->
     with_store(fun(Base, Auth) ->
         {Id, Built} = built_job(Base, Auth), Candidate = maps:get(<<"built_artifact">>, Built),
-        ?assertEqual({error, independent_evaluation_required}, ae_store:new_evolution_deployment(Base, Id, Candidate, handoff_limits())),
+        ?assertEqual({error, independent_evaluation_required}, new_evolution_deployment(Base, Id, Candidate, handoff_limits())),
         Evaluated = evaluated_job(Id, Built),
-        ?assertEqual({error, candidate_changed}, ae_store:new_evolution_deployment(Base, Id, Candidate#{<<"objective">> => <<"changed">>}, handoff_limits())),
+        ?assertEqual({error, candidate_changed}, new_evolution_deployment(Base, Id, Candidate#{<<"objective">> => <<"changed">>}, handoff_limits())),
         ?assertEqual({error, independent_evaluation_required}, ae_store:new_deployment(Base, Candidate, handoff_limits())),
-        ?assertEqual({error, job_budget_exhausted}, ae_store:new_evolution_deployment(Base, Id, Candidate,
+        ?assertEqual({error, job_budget_exhausted}, new_evolution_deployment(Base, Id, Candidate,
             (handoff_limits())#{<<"observe_ms">> := 60000})),
-        {ok, Dep} = ae_store:new_evolution_deployment(Base, Id, Candidate, handoff_limits()), DepId = maps:get(<<"id">>, Dep),
+        {ok, Dep} = new_evolution_deployment(Base, Id, Candidate, handoff_limits()), DepId = maps:get(<<"id">>, Dep),
         ?assertEqual(<<"staging">>, maps:get(<<"status">>, e({get, Id}))),
         ?assertEqual({error, job_in_deployment}, e({cancel, Id, <<"must use deployment rejection">>})),
         Score = maps:get(<<"1">>, maps:get(<<"evaluations">>, Evaluated)),
@@ -211,7 +211,7 @@ evaluated_artifact_approval_and_rollback_are_linked_test() ->
 linked_completion_and_preapproval_restart_test() ->
     [with_store(fun(Base, Auth) ->
         {Id, Built} = built_job(Base, Auth), Evaluated = evaluated_job(Id, Built), Candidate = maps:get(<<"built_artifact">>, Built),
-        {ok, Dep} = ae_store:new_evolution_deployment(Base, Id, Candidate, (handoff_limits())#{<<"observe_ms">> := 1}),
+        {ok, Dep} = new_evolution_deployment(Base, Id, Candidate, (handoff_limits())#{<<"observe_ms">> := 1}),
         DepId = maps:get(<<"id">>, Dep),
         case Finish of
             reject ->
@@ -239,7 +239,7 @@ expired_author_cannot_cancel_linked_deployment_test() ->
     with_store(fun(Base, Auth) ->
         {Id, Built} = built_job(Base, Auth, (limits())#{<<"total_ms">> := 1500}),
         _ = evaluated_job(Id, Built),
-        {ok, Dep} = ae_store:new_evolution_deployment(Base, Id, maps:get(<<"built_artifact">>, Built),
+        {ok, Dep} = new_evolution_deployment(Base, Id, maps:get(<<"built_artifact">>, Built),
             (handoff_limits())#{<<"observe_ms">> := 1}),
         ?assertEqual({error, invalid_job_state}, e({source_violation, Auth, Id})),
         receive after 1550 -> ok end,
@@ -248,8 +248,35 @@ expired_author_cannot_cancel_linked_deployment_test() ->
         ?assertEqual(ok, ae_store:reject(maps:get(<<"id">>, Dep), <<"expired">>)),
         ?assertEqual(<<"rejected">>, maps:get(<<"status">>, e({get, Id})))
     end).
+new_evolution_deployment(Base, Id, Candidate, Handoff) ->
+    Config = jsx:decode(evaluation_configuration(), [return_maps]),
+    ae_store:new_evolution_deployment(Base, Id, Candidate, Handoff, maps:get(<<"sandbox_limits">>, Config)).
 handoff_limits() -> #{<<"approval_ttl_ms">> => 30000, <<"observe_ms">> => 1000,
     <<"health_interval_ms">> => 10, <<"quiesce_ms">> => 1000}.
+
+staging_reservation_is_bounded_and_survives_restart_test() ->
+    with_store(fun(Base, Auth) ->
+        {Id, Built} = built_job(Base, Auth, (limits())#{<<"cpu_ms">> := 2501}), _ = evaluated_job(Id, Built),
+        Config = jsx:decode(evaluation_configuration(), [return_maps]),
+        Runtime = (maps:get(<<"sandbox_limits">>, Config))#{<<"memory_bytes">> := 1073741824, <<"pids">> := 128},
+        {ok, Lease} = e({reserve_staging, Id, Runtime}),
+        ?assertEqual(501, maps:get(<<"cpu_ms">>, Lease)),
+        Effective = maps:get(<<"runtime_limits">>, Lease),
+        ?assertEqual(1, maps:get(<<"cpu_seconds">>, Effective)),
+        ?assertEqual(536870912, maps:get(<<"memory_bytes">>, Effective)), ?assertEqual(32, maps:get(<<"pids">>, Effective)),
+        gen_server:stop(ae_store), {ok, _} = ae_store:start_link(get(test_root)),
+        ?assertEqual(2501, maps:get(<<"reserved_cpu_ms">>, e({get, Id}))),
+        ?assertEqual({error, execution_outcome_unknown}, e({reserve_staging, Id, Runtime}))
+    end).
+
+exhausted_staging_budget_cannot_create_deployment_test() ->
+    with_store(fun(Base, Auth) ->
+        {Id, Built} = built_job(Base, Auth, (limits())#{<<"cpu_ms">> := 2000}), _ = evaluated_job(Id, Built),
+        ?assertEqual({error, budget_exhausted}, new_evolution_deployment(Base, Id,
+            maps:get(<<"built_artifact">>, Built), handoff_limits())),
+        ?assertEqual(<<"rejected">>, maps:get(<<"status">>, e({get, Id}))),
+        ?assertEqual(undefined, ae_store:active_deployment()), ?assertEqual(Base, ae_store:routing())
+    end).
 
 built_job(Base, Auth) -> built_job(Base, Auth, limits()).
 built_job(Base, Auth, Limits) ->

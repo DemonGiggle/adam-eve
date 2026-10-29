@@ -5,7 +5,7 @@
          reserve_tool/3, reserve_tool/4, finish_tool/4, retry_turn/1, cancel_turn/1, events/0]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
 -export([register_artifact/1, checkpoint/1, get_checkpoint/1, quiesce/2,
-         new_deployment/3, new_evolution_deployment/4, staged/3, approve/2, reject/2, deployment/1,
+         new_deployment/3, new_evolution_deployment/5, staged/3, approve/2, reject/2, deployment/1,
          active_deployment/0, promote/4, rollback/5, complete/2, recover_handoff/0,
          activate_checkpoint/3, runtime_failed/2, evolution/1, recovery/0, verify_recovery/3]).
 
@@ -29,7 +29,8 @@ checkpoint(Expected) -> call({checkpoint, Expected}).
 get_checkpoint(Id) -> call({get_checkpoint, Id}).
 quiesce(Expected, Job) -> call({quiesce, Expected, Job}).
 new_deployment(Expected, Candidate, Limits) -> call({new_deployment, Expected, Candidate, Limits}).
-new_evolution_deployment(Expected, Id, Candidate, Limits) -> call({new_evolution_deployment, Expected, Id, Candidate, Limits}).
+new_evolution_deployment(Expected, Id, Candidate, Limits, RuntimeLimits) ->
+    call({new_evolution_deployment, Expected, Id, Candidate, Limits, RuntimeLimits}).
 staged(Id, Descriptor, Evaluation) -> call({staged, Id, Descriptor, Evaluation}).
 approve(Id, Binding) -> call({approve, Id, Binding}).
 reject(Id, Reason) -> call({reject, Id, Reason}).
@@ -260,7 +261,7 @@ dispatch({new_deployment, Expected, Candidate, Limits}, Db) ->
         <<"limits">> => Limits, <<"created_at">> => now_ms(),
         <<"expires_at">> => now_ms() + maps:get(<<"approval_ttl_ms">>, Limits)},
     save_job(Db, Job), event(Db, <<"deployment_started">>, Job), {ok, Job};
-dispatch({new_evolution_deployment, Expected, EvolutionId, Candidate, Limits}, Db) ->
+dispatch({new_evolution_deployment, Expected, EvolutionId, Candidate, Limits, RuntimeLimits}, Db) ->
     require_baseline(Db, Expected), require_open(Db),
     require(active_job(Db) =:= undefined, deployment_in_progress),
     {ok, Evolution, Evaluation} = evolution_result(ae_evolution_store:dispatch(Db, {for_deployment, EvolutionId, Expected})),
@@ -270,15 +271,21 @@ dispatch({new_evolution_deployment, Expected, EvolutionId, Candidate, Limits}, D
     require(is_map(Limits) andalso lists:sort(maps:keys(Limits)) =:= lists:sort(Keys) andalso
         lists:all(fun(V) -> is_integer(V) andalso V > 0 andalso V =< 300000 end, maps:values(Limits)), handoff_not_configured),
     require(now_ms() + maps:get(<<"observe_ms">>, Limits) < maps:get(<<"deadline">>, Evolution), job_budget_exhausted),
-    ok = register_manifest(Db, Candidate),
-    Id = ae_policy:sha256(crypto:strong_rand_bytes(32)),
-    Job = #{<<"id">> => Id, <<"status">> => <<"staging">>, <<"baseline">> => Expected,
-        <<"candidate">> => Candidate, <<"target_slot">> => maps:get(<<"target_slot">>, Evolution),
-        <<"evolution_job">> => EvolutionId, <<"independent_evaluation">> => Evaluation,
-        <<"evolution_deadline">> => maps:get(<<"deadline">>, Evolution),
-        <<"limits">> => Limits, <<"created_at">> => now_ms(),
-        <<"expires_at">> => min(now_ms() + maps:get(<<"approval_ttl_ms">>, Limits), maps:get(<<"deadline">>, Evolution))},
-    save_job(Db, Job), event(Db, <<"deployment_started">>, Job), {ok, Job};
+    case ae_evolution_store:dispatch(Db, {reserve_staging, EvolutionId, RuntimeLimits}) of
+        {ok, Lease} when is_map(Lease) ->
+            require(now_ms() + maps:get(<<"observe_ms">>, Limits) < maps:get(<<"expires_at_ms">>, Lease), job_budget_exhausted),
+            ok = register_manifest(Db, Candidate),
+            Id = ae_policy:sha256(crypto:strong_rand_bytes(32)),
+            Job = #{<<"id">> => Id, <<"status">> => <<"staging">>, <<"baseline">> => Expected,
+                <<"candidate">> => Candidate, <<"target_slot">> => maps:get(<<"target_slot">>, Evolution),
+                <<"evolution_job">> => EvolutionId, <<"independent_evaluation">> => Evaluation,
+                <<"evolution_deadline">> => maps:get(<<"deadline">>, Evolution),
+                <<"staging_execution">> => Lease, <<"runtime_deadline">> => maps:get(<<"expires_at_ms">>, Lease),
+                <<"limits">> => Limits, <<"created_at">> => now_ms(),
+                <<"expires_at">> => min(now_ms() + maps:get(<<"approval_ttl_ms">>, Limits), maps:get(<<"expires_at_ms">>, Lease))},
+            save_job(Db, Job), event(Db, <<"deployment_started">>, Job), {ok, Job};
+        Error -> Error
+    end;
 dispatch({staged, Id, Descriptor, Evaluation}, Db) ->
     Job = require_job(Db, Id, [<<"staging">>]),
     require_baseline(Db, maps:get(<<"baseline">>, Job)), require_unexpired(Job),
@@ -321,7 +328,7 @@ dispatch({promote, Id, Expected, Descriptor, Checkpoint}, Db) ->
     Job = require_job(Db, Id, [<<"quiescing">>]), require_unexpired(Job),
     require_evolution(Db, Job),
     require(now_ms() + maps:get(<<"observe_ms">>, maps:get(<<"limits">>, Job)) =<
-        maps:get(<<"evolution_deadline">>, Job, (1 bsl 63) - 1), job_budget_exhausted),
+        maps:get(<<"runtime_deadline">>, Job, maps:get(<<"evolution_deadline">>, Job, (1 bsl 63) - 1)), job_budget_exhausted),
     require_baseline(Db, Expected),
     require(ae_policy:same_baseline(Expected, maps:get(<<"baseline">>, Job)), stale_routing),
     require(maps:get(<<"admission">>, route(Db), <<"open">>) =:= <<"closed">>, not_quiesced),

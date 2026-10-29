@@ -7,6 +7,8 @@ build-to-evaluation orchestration yet. Evaluation does not grant deployment
 approval. Digest-only manual staging rejects generated releases; trusted
 `ae_deployment:stage_evolution/1` requires the specific evaluated job, performs
 fresh isolated standby checks, and then waits for explicit bound approval.
+That stage reserves its own remaining job CPU allowance before launch and
+enforces the job's memory/process ceilings and absolute runtime deadline.
 
 ## Isolation and durable results
 

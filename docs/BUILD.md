@@ -36,7 +36,7 @@ compiler code still executes on the operator host in this development path.
 `ae_build_sup:start_job(JobId, Config, NotifyPid)` starts a temporary supervised
 `ae_builder` for an accepted proposal. It reserves a durable execution lease
 before starting the fixed Python launcher. CPU reservations accumulate across
-builds, evaluations and repairs without refunds after failure or restart. An
+builds, evaluations, staging and repairs without refunds after failure or restart. An
 unresolved reservation cannot silently launch a duplicate execution. Each lease
 also has an absolute expiry within the job deadline. The builder can advance a
 job from `building` to `testing`; it cannot approve or deploy it.

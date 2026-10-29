@@ -198,17 +198,23 @@ def namespace_command(command, limits, policy, readonly=(), data_files=(), writa
     return args + list(command)
 
 
-def run(cgroup_root, limits, command, *, readonly=(), data_files=(), writable_tmp=(), watch_parent=False, cpu_budget_ms=None):
+def run(cgroup_root, limits, command, *, readonly=(), data_files=(), writable_tmp=(), watch_parent=False, cpu_budget_ms=None, deadline_ms=None):
     """Run an opaque program only after the kernel resource boundary is ready."""
     validate_limits(limits)
     if cpu_budget_ms is None:
         cpu_budget_ms = limits["cpu_seconds"] * 1000
     if type(cpu_budget_ms) is not int or not 0 < cpu_budget_ms <= limits["cpu_seconds"] * 1000:
         raise Unavailable("invalid_cpu_budget")
+    if deadline_ms is not None and (type(deadline_ms) is not int or deadline_ms <= time.time_ns() // 1000000):
+        raise Unavailable("sandbox_deadline_expired")
     with Cgroup(cgroup_root, limits) as group, seccomp_policy() as policy:
         args = namespace_command(command, limits, policy, readonly, data_files, writable_tmp)
         descriptors = (policy,) + tuple(fd for fd, _ in data_files)
         with selectors.DefaultSelector() as selector:
+            remaining_ms = limits["wall_ms"] if deadline_ms is None else min(limits["wall_ms"], deadline_ms - time.time_ns() // 1000000)
+            if remaining_ms <= 0:
+                raise Unavailable("sandbox_deadline_expired")
+            deadline = time.monotonic() + remaining_ms / 1000
             if watch_parent:
                 selector.register(sys.stdin.buffer, selectors.EVENT_READ, "parent")
             with subprocess.Popen(args, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
@@ -216,7 +222,6 @@ def run(cgroup_root, limits, command, *, readonly=(), data_files=(), writable_tm
                     preexec_fn=group.enter_child) as child:
                 try:
                     selector.register(child.stdout, selectors.EVENT_READ, "output")
-                    deadline = time.monotonic() + limits["wall_ms"] / 1000
                     output = bytearray()
                     reason = None
                     while child.poll() is None or selector.get_map().get(child.stdout.fileno()):
@@ -292,6 +297,7 @@ def main():
     parser.add_argument("--ipc-dir", type=Path)
     parser.add_argument("--token")
     parser.add_argument("--cpu-budget-ms", type=int)
+    parser.add_argument("--deadline-ms", type=int)
     args = parser.parse_args()
     try:
         limits = validate_limits(json.loads(args.limits_json))
@@ -307,7 +313,7 @@ def main():
             code, _, reason = run(args.cgroup_root, limits,
                 ["/usr/bin/escript", "/agent/seed", "/ipc/ipc", args.token],
                 readonly=[(args.ipc_dir, "/ipc")], data_files=[(release, "/agent/seed")], watch_parent=True,
-                cpu_budget_ms=args.cpu_budget_ms)
+                cpu_budget_ms=args.cpu_budget_ms, deadline_ms=args.deadline_ms)
         if code or reason:
             raise Unavailable(reason or "sandbox_runtime_failed")
     except (Unavailable, OSError, ValueError, subprocess.SubprocessError) as error:
