@@ -1,0 +1,92 @@
+{
+  "version": 1,
+  "repetitions": 2,
+  "min_success_delta_ppm": 500000,
+  "max_success_regression_ppm": 0,
+  "max_latency_ratio_milli": 100000,
+  "max_model_cost_ratio_milli": 1000,
+  "max_model_tokens_ratio_milli": 1000,
+  "max_failure_rate_ppm": 0,
+  "max_tool_requests": 8,
+  "mock_input_tokens": 20,
+  "mock_output_tokens": 10,
+  "mock_cost_microunits": 1,
+  "repair_approval": null,
+  "min_agent_test_modules": 0,
+  "cases": [
+    {
+      "id": "objective",
+      "message": "Recall ${nonce} objective",
+      "history": [],
+      "model_result": {
+        "text": "answer ${nonce}"
+      },
+      "expected_messages": [
+        {
+          "role": "user",
+          "content": "Recall ${nonce} objective"
+        }
+      ],
+      "expected_type": "reply",
+      "expected_text": "authored:answer ${nonce}",
+      "kind": "task",
+      "required": false,
+      "objective": true
+    },
+    {
+      "id": "replay",
+      "message": "Recall ${nonce} replay",
+      "history": [
+        {
+          "role": "user",
+          "content": "Remember ${nonce}"
+        },
+        {
+          "role": "assistant",
+          "content": "Saved ${nonce}"
+        }
+      ],
+      "model_result": {
+        "text": "answer ${nonce}"
+      },
+      "expected_messages": [
+        {
+          "role": "user",
+          "content": "Remember ${nonce}"
+        },
+        {
+          "role": "assistant",
+          "content": "Saved ${nonce}"
+        },
+        {
+          "role": "user",
+          "content": "Recall ${nonce} replay"
+        }
+      ],
+      "expected_type": "reply",
+      "expected_text": "authored:answer ${nonce}",
+      "kind": "memory",
+      "required": true,
+      "objective": false
+    },
+    {
+      "id": "provider-denial",
+      "message": "Recall ${nonce} provider-denial",
+      "history": [],
+      "model_result": {
+        "error": "provider_unavailable"
+      },
+      "expected_messages": [
+        {
+          "role": "user",
+          "content": "Recall ${nonce} provider-denial"
+        }
+      ],
+      "expected_type": "failure",
+      "expected_text": "provider_unavailable",
+      "kind": "tool",
+      "required": true,
+      "objective": false
+    }
+  ]
+}

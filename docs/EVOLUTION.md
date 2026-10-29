@@ -6,13 +6,15 @@ controller-authorized job with the active runtime. The source/status and budgete
 LLM broker capabilities are available only during that exchange, bound to its
 job, generation, authenticated runtime and epoch. There is no CLI evolution
 command yet, and `evolution_enabled` remains false. The orchestrating
-`ae_evolution` state machine, independent evaluator/scorecard, and
+`ae_evolution` state machine, generated-artifact approval integration, and
 publication/retention recovery remain
 required before the Phase 2 exit criterion can be claimed.
 The fixed reproducible seed recipe is available separately; see [BUILD.md](BUILD.md).
 That guide also describes the supervised isolated builder, durable execution
 leases, and the gate that keeps its unevaluated output out of production.
 Operator backup/restore and its local recovery drill are in [RECOVERY.md](RECOVERY.md).
+The supervised independent evaluator and durable scorecards are implemented;
+see [EVALUATION.md](EVALUATION.md). They do not enable deployment by themselves.
 
 ## Authoring path
 
@@ -65,8 +67,9 @@ code and does not establish live-model authoring quality.
 `ae_store:evolution(Operation)` dispatches into `ae_evolution_store` inside the
 same SQLite transaction mechanism as routing and conversation. New tables retain
 jobs, proposal fingerprints/patch hashes, accepted attempts, and LLM reservations.
-The current library implements proposing, accepted-for-build, bounded repair,
-rejection, and cancellation; it does not run code or deploy artifacts.
+The ledger implements proposing, accepted-for-build, testing, evaluated, bounded
+repair, rejection, and cancellation. Supervised workers perform isolated builds
+and evaluations; the ledger does not deploy artifacts.
 
 Creating a job requires a trusted `origin_ref`, objective, the committed active
 slot/runtime/generation/source/epoch, and a complete validated limits map. There

@@ -19,7 +19,7 @@ main([Scenario, LimitsPath]) ->
             BuildResult = receive {ae_build_result, Id, R} -> R after 15000 -> error(builder_did_not_finish) end,
             receive {'DOWN', Ref, process, Pid, normal} -> ok after 5000 -> error(builder_did_not_stop) end,
             BuildResult;
-        "builder-success" ->
+        Scenario0 when Scenario0 =:= "builder-success"; Scenario0 =:= "evaluator-success"; Scenario0 =:= "evaluator-unavailable" ->
             {ok, _} = ae_router:author(Id),
             {ok, Pid} = ae_build_sup:start_job(Id, Config, self()), Ref = monitor(process, Pid),
             Wait = maps:get(<<"total_ms">>, Limits),
@@ -30,7 +30,20 @@ main([Scenario, LimitsPath]) ->
             Manifest = maps:get(<<"built_artifact">>, Built),
             {error, independent_evaluation_required} = ae_store:new_deployment(ae_store:routing(), Manifest,
                 #{<<"approval_ttl_ms">> => 60000, <<"observe_ms">> => 60000}),
-            {ok, Manifest};
+            case Scenario of
+                "builder-success" -> {ok, Manifest};
+                _ ->
+                    {ok, EvalPid} = ae_eval_sup:start_job(Id, Config, self()), EvalRef = monitor(process, EvalPid),
+                    {ok, <<"conversation still works">>} = ae_router:turn(list_to_binary(Scenario ++ "-during-eval"), <<"test">>, <<"hello">>),
+                    Evaluated = receive {ae_evaluation_result, Id, ER} -> ER after Wait -> error(evaluator_did_not_finish) end,
+                    receive {'DOWN', EvalRef, process, EvalPid, normal} -> ok after 5000 -> error(evaluator_did_not_stop) end,
+                    case Evaluated of
+                        {ok, _} -> {error, independent_evaluation_required} = ae_store:new_deployment(ae_store:routing(), Manifest,
+                            #{<<"approval_ttl_ms">> => 60000, <<"observe_ms">> => 60000});
+                        _ -> ok
+                    end,
+                    false = code:is_loaded(seed_agent), Evaluated
+            end;
         "repair" ->
             {ok, #{<<"attempt">> := 1}} = ae_router:author(Id),
             {ok, _} = ae_store:evolution({attempt_result, Id, 1, <<"build_failed">>, <<"public compiler diagnostic">>}),

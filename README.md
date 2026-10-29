@@ -15,8 +15,10 @@ paginated source access, a protected patch policy, and an optional restricted
 runtime backend. The seed can read scoped source and submit budgeted structured
 LLM patches through an internal controller-authorized authoring exchange. The
 isolated builder now records execution budgets and retains generated releases
-for testing. The orchestrator and independent evaluator are still required
-before enabling evolution. Consistent online backups and fenced restoration are
+for testing. A supervised independent evaluator now compares restricted releases
+and saves bound scorecards; lifecycle orchestration and production approval
+integration are still required before enabling evolution. See
+[docs/EVALUATION.md](docs/EVALUATION.md). Consistent online backups and fenced restoration are
 available through the operator commands in [docs/RECOVERY.md](docs/RECOVERY.md).
 See [docs/EVOLUTION.md](docs/EVOLUTION.md) and
 [docs/ISOLATION.md](docs/ISOLATION.md) for implemented behavior, required host
@@ -117,8 +119,8 @@ conversation writes. The active runtime keeps serving while approval is pending.
 `{"op":"reject","deployment_id":"..."}` rejects a staged candidate. Expired
 approvals, runtime replacement, or changed source/executable/manifest contents
 cannot authorize promotion. The current gates are the manual development
-handoff checks; the broader independent behavioral/security scorecard in Phase 2
-is still pending.
+handoff checks. An independent comparison and scorecard are available internally;
+integration with generated-artifact deployment is still pending.
 
 Promotion closes admission and new broker calls, drains the in-flight turn or
 leaves it durably retryable at the configured deadline, saves a controller-owned
@@ -201,8 +203,8 @@ The default development backend runs trusted manual seeds as the controller's OS
 user. Generated candidates require the restricted Bubblewrap/cgroup backend;
 the supervised builder uses that backend and retains releases for evaluation.
 Restricted build and runtime crash-recovery checks have passed in a disposable
-Linux VM with cgroup delegation. Full restricted Adam/Eve handoff, independent
-evaluation, the evolution orchestrator, retention cleanup, and off-host recovery
+Linux VM with cgroup delegation. Full restricted Adam/Eve handoff, evaluation
+and approval lifecycle integration, retention cleanup, and off-host recovery
 validation remain unfinished. The escript retains compiled code and dependencies;
 its recorded host ERTS must remain installed. No live-model quality claim is made
 by the fixture tests.

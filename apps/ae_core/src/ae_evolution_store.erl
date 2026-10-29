@@ -20,6 +20,17 @@ dispatch(Db, active) -> active(Db);
 dispatch(Db, {attempt, Id, Number}) ->
     case ae_sql:rows(Db, "SELECT data FROM evolution_proposals WHERE job_id=? AND attempt=?", [Id, Number]) of
         [] -> undefined; [{Data}] -> jsx:decode(Data, [return_maps]) end;
+dispatch(Db, {reserve_evaluation, Id, Attempt, CpuMs, WallMs, Binding, Configuration}) ->
+    need(ae_evaluator:valid_binding(Binding), invalid_evaluation_binding),
+    need(ae_evaluator:valid_configuration(Configuration, Binding), invalid_evaluation_configuration),
+    case dispatch(Db, {reserve_execution, Id, Attempt, <<"evaluate">>, CpuMs, WallMs}) of
+        {ok, Lease} when is_map(Lease) ->
+            Job = must_get(Db, Id), Key = execution_key(Attempt, <<"evaluate">>),
+            Bound = Lease#{<<"evaluation_binding">> => Binding, <<"evaluation_configuration">> => Configuration},
+            Executions = maps:get(<<"executions">>, Job),
+            save(Db, Job#{<<"executions">> := Executions#{Key := Bound}}), {ok, Bound};
+        Error -> Error
+    end;
 dispatch(Db, {reserve_execution, Id, Attempt, Kind, CpuMs, WallMs}) ->
     Job = must_get(Db, Id), need(current(Db, Job) =:= ok, stale_or_expired_job),
     need(lists:member(Kind, [<<"build">>, <<"evaluate">>]), invalid_execution_kind),
@@ -53,6 +64,28 @@ dispatch(Db, {finish_build, Id, Attempt, LeaseId, Manifest}) ->
             <<"artifact_digest">> => maps:get(<<"digest">>, Manifest)}}},
     save(Db, New), event(Db, <<"candidate_built">>, #{<<"job_id">> => Id, <<"attempt">> => Attempt,
         <<"artifact_digest">> => maps:get(<<"digest">>, Manifest), <<"execution_id">> => LeaseId}), {ok, New};
+dispatch(Db, {finish_evaluation, Id, Attempt, LeaseId, Scorecard}) ->
+    Job = must_get(Db, Id), need(current(Db, Job) =:= ok, stale_or_expired_job),
+    {Key, Lease} = execution(Job, Attempt, <<"evaluate">>, LeaseId),
+    need(maps:get(<<"status">>, Job) =:= <<"testing">>, invalid_job_state),
+    need(maps:get(<<"status">>, Lease) =:= <<"reserved">>, execution_finished),
+    need(now_ms() =< maps:get(<<"expires_at_ms">>, Lease), execution_expired),
+    need(ae_evaluator:valid_result(Scorecard, Job, Lease), invalid_evaluation_result),
+    Hash = ae_policy:digest(Scorecard), Executions = maps:get(<<"executions">>, Job),
+    Results = maps:get(<<"evaluations">>, Job, #{}),
+    Updated = Job#{<<"evaluations">> => Results#{integer_to_binary(Attempt) =>
+            #{<<"digest">> => Hash, <<"scorecard">> => Scorecard}},
+        <<"executions">> := Executions#{Key := Lease#{<<"status">> := <<"completed">>, <<"evaluation_digest">> => Hash}}},
+    save(Db, Updated), event(Db, <<"candidate_evaluated">>, #{<<"job_id">> => Id,
+        <<"attempt">> => Attempt, <<"evaluation_digest">> => Hash, <<"passed">> => maps:get(<<"passed">>, Scorecard)}),
+    case maps:get(<<"passed">>, Scorecard) of
+        true -> New = Updated#{<<"status">> := <<"evaluated">>, <<"evaluation_digest">> => Hash},
+            save(Db, New), {ok, New};
+        false ->
+            Summary = <<"Independent evaluation did not meet the configured gates.">>,
+            Max = maps:get(<<"max_diagnostic_bytes">>, maps:get(<<"limits">>, Job)),
+            attempt_result(Db, Updated, Attempt, <<"tests_failed">>, binary:part(Summary, 0, min(Max, byte_size(Summary))))
+    end;
 dispatch(Db, {execution_failed, Id, Attempt, Kind, LeaseId, Reason, PublicDiagnostics}) ->
     Job = must_get(Db, Id), need(current(Db, Job) =:= ok, stale_or_expired_job),
     {Key, Lease} = execution(Job, Attempt, Kind, LeaseId),

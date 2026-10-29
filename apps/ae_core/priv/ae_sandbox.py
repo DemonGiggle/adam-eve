@@ -291,6 +291,7 @@ def main():
     parser.add_argument("--digest")
     parser.add_argument("--ipc-dir", type=Path)
     parser.add_argument("--token")
+    parser.add_argument("--cpu-budget-ms", type=int)
     args = parser.parse_args()
     try:
         limits = validate_limits(json.loads(args.limits_json))
@@ -305,7 +306,8 @@ def main():
         with sealed_release(args.runtime, args.digest, limits["file_bytes"]) as release:
             code, _, reason = run(args.cgroup_root, limits,
                 ["/usr/bin/escript", "/agent/seed", "/ipc/ipc", args.token],
-                readonly=[(args.ipc_dir, "/ipc")], data_files=[(release, "/agent/seed")], watch_parent=True)
+                readonly=[(args.ipc_dir, "/ipc")], data_files=[(release, "/agent/seed")], watch_parent=True,
+                cpu_budget_ms=args.cpu_budget_ms)
         if code or reason:
             raise Unavailable(reason or "sandbox_runtime_failed")
     except (Unavailable, OSError, ValueError, subprocess.SubprocessError) as error:

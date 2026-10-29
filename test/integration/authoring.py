@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
-"""Exercise real seed authoring and budgeted provider transport without executing patches."""
+"""Exercise seed authoring; optional delegated-cgroup cases build and evaluate patches."""
+import difflib
 import json
 import os
 from pathlib import Path
+import sqlite3
 import subprocess
+import sys
 import tempfile
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -13,6 +16,7 @@ from phase0 import CHECKOUT
 class Provider(BaseHTTPRequestHandler):
     scenario = None
     requests = []
+    conversation_requests = 0
     patch = ("diff --git a/apps/ae_seed/src/seed_agent.erl b/apps/ae_seed/src/seed_agent.erl\n"
              "--- a/apps/ae_seed/src/seed_agent.erl\n+++ b/apps/ae_seed/src/seed_agent.erl\n"
              "@@ -1 +1 @@\n--module(seed_agent).\n+-module(seed_agent). % authored\n")
@@ -21,6 +25,7 @@ class Provider(BaseHTTPRequestHandler):
         body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
         assert self.path == "/api/chat" and body["stream"] is False and body["model"] == "fixture"
         if body.get("format") != "json":
+            type(self).conversation_requests += 1
             content = "conversation still works"
         else:
             self.requests.append(body)
@@ -87,24 +92,41 @@ def main():
         try:
             scenarios = ["success", "protected", "budget", "invalid", "missing-usage", "over-budget", "cache", "repair", "builder-unavailable"]
             if os.environ.get("AE_TEST_CGROUP_ROOT"):
-                scenarios.append("builder-success")
+                scenarios.extend(["builder-success", "evaluator-success", "evaluator-unavailable"])
             if os.environ.get("AE_TEST_AUTHORING_SCENARIOS"):
                 scenarios = os.environ["AE_TEST_AUTHORING_SCENARIOS"].split(",")
-                assert all(s in {"success", "protected", "budget", "invalid", "missing-usage", "over-budget", "cache", "repair", "builder-unavailable", "builder-success"} for s in scenarios)
+                assert all(s in {"success", "protected", "budget", "invalid", "missing-usage", "over-budget", "cache", "repair", "builder-unavailable", "builder-success", "evaluator-success", "evaluator-unavailable"} for s in scenarios)
+            original_patch = Provider.patch
             for scenario in scenarios:
+                print("Authoring scenario: " + scenario, flush=True)
                 Provider.scenario = scenario
                 Provider.requests = []
+                Provider.conversation_requests = 0
+                Provider.patch = original_patch
+                if scenario.startswith("evaluator-"):
+                    path = "apps/ae_seed/src/seed_agent.erl"
+                    source = (CHECKOUT / path).read_text()
+                    changed = source.replace('<<"text">> => Text, <<"event_refs">> => []',
+                        '<<"text">> => <<"authored:", Text/binary>>, <<"event_refs">> => []')
+                    assert source != changed
+                    Provider.patch = f"diff --git a/{path} b/{path}\n" + "".join(difflib.unified_diff(
+                        source.splitlines(True), changed.splitlines(True), fromfile="a/" + path, tofile="b/" + path))
                 policy = {**limits, "max_llm_calls": 1} if scenario == "budget" else limits
                 if scenario == "repair":
                     policy = {**limits, "max_llm_calls": 8, "max_tokens": 262144}
-                if scenario == "builder-success":
+                if scenario in ("builder-success", "evaluator-success", "evaluator-unavailable"):
                     wall_ms = int(os.environ.get("AE_TEST_BUILD_WALL_MS", "20000"))
                     cpu_ms = int(os.environ.get("AE_TEST_BUILD_CPU_MS", "10000"))
                     policy = {**limits, "total_ms": wall_ms * 3, "build_ms": wall_ms, "cpu_ms": cpu_ms * 3}
+                if scenario.startswith("evaluator-"):
+                    evaluation_wall = int(os.environ.get("AE_TEST_EVAL_WALL_MS", "180000"))
+                    evaluation_cpu = int(os.environ.get("AE_TEST_EVAL_CPU_MS", "60000"))
+                    policy.update({"total_ms": wall_ms * 2 + evaluation_wall * 2,
+                        "evaluation_ms": evaluation_wall, "cpu_ms": cpu_ms + evaluation_cpu * 2})
                 limit_file = root / "limits.json"
                 limit_file.write_text(json.dumps(policy))
                 extra_env = {}
-                if scenario in ("builder-unavailable", "builder-success"):
+                if scenario in ("builder-unavailable", "builder-success", "evaluator-success", "evaluator-unavailable"):
                     if scenario == "builder-unavailable":
                         fake = root / "fake-cgroup"
                         fake.mkdir()
@@ -117,6 +139,19 @@ def main():
                         "sandbox_limits": {"memory_bytes": 536870912, "pids": 32, "cpu_percent": 100,
                             "cpu_seconds": (cpu_ms + 999) // 1000, "address_space_bytes": 1073741824, "file_bytes": 33554432,
                             "open_files": 128, "output_bytes": 16777216, "wall_ms": wall_ms}})
+                if scenario.startswith("evaluator-"):
+                    sys.path.insert(0, str(CHECKOUT / "test/evaluation"))
+                    import test_evaluate
+                    evaluation = json.loads(extra_env["AE_BUILD_CONFIG_JSON"])
+                    del evaluation["jsx_package"]
+                    evaluation.update({"startup_ms": 30000, "turn_ms": 15000, "policy": test_evaluate.policy(),
+                        "sandbox_limits": {**evaluation["sandbox_limits"], "wall_ms": evaluation_wall,
+                            "cpu_seconds": (evaluation_cpu + 3999)//4000}})
+                    if scenario == "evaluator-unavailable":
+                        fake_evaluation = root / "fake-evaluation-cgroup"
+                        fake_evaluation.mkdir()
+                        evaluation["cgroup_root"] = str(fake_evaluation)
+                    extra_env["AE_EVAL_CONFIG_JSON"] = json.dumps(evaluation)
                 result = subprocess.run(["escript", str(CHECKOUT / "test/integration/authoring.escript"), scenario, str(limit_file)],
                     cwd=CHECKOUT, env={**os.environ, "AE_DATA_ROOT": str(root), "AE_LLM_MODEL": "fixture",
                         "AE_LLM_URL": f"http://127.0.0.1:{server.server_port}/api/chat", **extra_env},
@@ -124,6 +159,7 @@ def main():
                 assert result.returncode == 0, result.stdout + result.stderr
                 output = json.loads(result.stdout.splitlines()[0])
                 assert output["conversation"]["ok"] == "conversation still works", output
+                assert Provider.conversation_requests == (2 if scenario.startswith("evaluator-") else 1)
                 assert output["status"]["evolution_enabled"] is False
                 job = output["job"]
                 assert job["reserved_tokens"] == job["llm_calls"] * policy["tokens_per_call"]
@@ -149,6 +185,21 @@ def main():
                     assert job["built_artifact"] == manifest
                     assert next(iter(job["executions"].values()))["status"] == "completed"
                     assert (root / "artifacts" / manifest["digest"] / "seed").is_file()
+                elif scenario.startswith("evaluator-"):
+                    assert job["reserved_cpu_ms"] == cpu_ms + evaluation_cpu, output
+                    if scenario == "evaluator-success":
+                        assert job["status"] == "evaluated", output
+                        scorecard = job["evaluations"]["1"]["scorecard"]
+                        assert scorecard["passed"] is True and all(scorecard["gates"].values()), scorecard
+                        assert scorecard["baseline"]["objective"]["rate_ppm"] == 0
+                        assert scorecard["candidate"]["objective"]["rate_ppm"] == 1000000
+                        assert scorecard["configuration_hash"] == job["executions"]["1:evaluate"]["evaluation_binding"]["configuration_hash"]
+                        assert json.loads(job["executions"]["1:evaluate"]["evaluation_configuration"]) == evaluation
+                        assert job["built_artifact"]["evaluation"] is None
+                        assert len(Provider.requests) == 3, "Evaluator must not contact the live provider"
+                    else:
+                        assert output["result"]["error"] == "cgroup_v2_required", output
+                        assert job["status"] == "proposing" and job["executions"]["1:evaluate"]["status"] == "failed", output
                 else:
                     expected = {"protected": "protected_source", "budget": "budget_exhausted",
                         "invalid": "invalid_authoring_response", "missing-usage": "provider_usage_missing",
@@ -156,6 +207,9 @@ def main():
                     assert output["result"]["error"] == expected, output
                     assert job["attempts"] == 0
                 assert not list((root / "workspaces").iterdir())
+                with sqlite3.connect(root / "state/agent.sqlite3") as database:
+                    turns = database.execute("SELECT message,reply,status FROM turns").fetchall()
+                assert turns and all(turn == ("hello", "conversation still works", "completed") for turn in turns), turns
             print("Authoring integration passed: scoped source, budgeted patches/repairs, dedupe, denial and usable conversation; generated releases remain unapproved.")
         finally:
             server.shutdown()

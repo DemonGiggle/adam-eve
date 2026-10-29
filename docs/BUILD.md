@@ -63,8 +63,9 @@ The manifest records the source tree/parent, objective, job/attempt, patch hash,
 toolchain compatibility and pinned recipe/dependency hashes. Its `authoring` is
 `llm` and `evaluation` is null. Publication alone does not make it deployable:
 ordinary deployment rejects generated artifacts with
-`independent_evaluation_required`. An independent evaluator and the overall
-evolution lifecycle still need to be integrated before enabling self-evolution.
+`independent_evaluation_required`. The supervised independent evaluator is
+documented in [EVALUATION.md](EVALUATION.md); generated-artifact approval and the
+overall evolution lifecycle still need integration before enabling self-evolution.
 Missing isolation never falls back to the manual host compiler.
 
 Configure the internal builder through `AE_BUILD_CONFIG_JSON`. Every field is
@@ -127,5 +128,5 @@ ms build wall time and 90000 ms CPU. These are selected by
 `AE_TEST_BUILD_WALL_MS`/`AE_TEST_BUILD_CPU_MS`, not substituted for production
 budgets. A separate restricted-runtime test killed the launcher, verified fresh
 epochs and retained completed/unknown effects, then restarted from a checkpoint.
-Full restricted Adam/Eve handoff and the independent evaluator remain separate
-acceptance work.
+Full restricted Adam/Eve handoff remains separate acceptance work. Evaluator
+checks and their scope are documented separately in [EVALUATION.md](EVALUATION.md).
