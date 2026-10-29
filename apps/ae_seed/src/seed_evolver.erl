@@ -21,7 +21,9 @@ result(Socket, Reply, #{waiting := <<"evolution_llm">>} = State) ->
 result(Socket, Reply, #{waiting := <<"evolution_status">>} = State) ->
     case Reply of
         #{<<"status">> := <<"proposing">>, <<"attempts">> := Attempts} ->
-            llm(Socket, Reply, State#{attempt := Attempts + 1});
+            llm(Socket, Reply#{<<"next_action">> => <<"source_list">>,
+                <<"instruction">> => <<"No source has been read in this exchange. Return a source_list action first; do not invent source or propose a patch yet.">>},
+                State#{attempt := Attempts + 1});
         _ -> fail(Socket, <<"invalid_authoring_state">>, State)
     end;
 result(Socket, Reply, State) -> llm(Socket, source_text(Reply), State).

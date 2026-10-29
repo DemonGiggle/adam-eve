@@ -105,6 +105,13 @@ with structured rationale. Source reads support paginated paths and byte ranges;
 the strategy keeps bounded recent authoring context instead of requiring the
 whole repository in one prompt. Proposal identities include the durable job and
 attempt number, and all repairs remain against the original pinned baseline.
+The first model request explicitly asks for source discovery before proposing.
+The Ollama adapter supplies an exact JSON schema for source-list, source-read,
+and proposal actions, with required rationale fields and no extra properties;
+authoring uses temperature zero. This follows Ollama's
+[structured output interface](https://docs.ollama.com/capabilities/structured-outputs).
+The agent and broker still validate actions, scope and budgets independently;
+schema-constrained decoding does not establish source or patch correctness.
 The authoring exchange has a request-count ceiling and a deadline even if a
 misbehaving seed continuously sends already-buffered messages. User turns are
 temporarily busy during authoring; health/status and recovery stay in the trusted

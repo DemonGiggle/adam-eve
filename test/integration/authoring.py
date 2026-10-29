@@ -24,12 +24,19 @@ class Provider(BaseHTTPRequestHandler):
     def do_POST(self):
         body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
         assert self.path == "/api/chat" and body["stream"] is False and body["model"] == "fixture"
-        if body.get("format") != "json":
+        authoring = isinstance(body.get("format"), dict)
+        if not authoring:
             type(self).conversation_requests += 1
             content = "conversation still works"
         else:
             self.requests.append(body)
             assert "num_ctx" in body["options"] and body["options"]["num_predict"] > 0
+            assert body["options"]["temperature"] == 0
+            actions = body["format"]["oneOf"]
+            assert {action["properties"]["action"]["const"] for action in actions} == {
+                "source_list", "source_read", "proposal"}
+            assert all(action["additionalProperties"] is False and
+                set(action["required"]) == set(action["properties"]) for action in actions)
             last = body["messages"][-1]["content"]
             if self.scenario != "cache":
                 last = json.loads(last)
@@ -65,7 +72,7 @@ class Provider(BaseHTTPRequestHandler):
             if self.scenario == "invalid":
                 content = "This is a prose-only suggestion, not a patch."
         response = {"done": True, "message": {"content": content}, "prompt_eval_count": 80, "eval_count": 100}
-        if body.get("format") == "json":
+        if authoring:
             if self.scenario == "missing-usage":
                 del response["prompt_eval_count"]
             if self.scenario == "over-budget":

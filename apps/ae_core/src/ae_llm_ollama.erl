@@ -11,8 +11,8 @@ complete_budgeted(Messages, Config, Tokens) when is_integer(Tokens), Tokens >= 2
     %% Bound both prompt context and generated tokens within the reservation.
     %% Accounting is mandatory for authoring, unlike the development chat path.
     Context = Tokens div 2, Output = Tokens - Context,
-    case request(Messages, Config, #{<<"num_ctx">> => Context, <<"num_predict">> => Output},
-                 #{<<"format">> => <<"json">>}) of
+    case request(Messages, Config, #{<<"num_ctx">> => Context, <<"num_predict">> => Output, <<"temperature">> => 0},
+                 #{<<"format">> => authoring_schema()}) of
         {ok, Response} ->
             Prompt = maps:get(<<"prompt_eval_count">>, Response, undefined),
             Cached = maps:get(<<"prompt_eval_cached_count">>, Response, 0),
@@ -27,6 +27,21 @@ complete_budgeted(Messages, Config, Tokens) when is_integer(Tokens), Tokens >= 2
         Error -> Error
     end;
 complete_budgeted(_, _, _) -> {error, insufficient_token_reservation}.
+
+authoring_schema() ->
+    String = #{<<"type">> => <<"string">>},
+    Number = #{<<"type">> => <<"integer">>, <<"minimum">> => 0},
+    Strings = #{<<"type">> => <<"array">>, <<"items">> => String},
+    #{<<"oneOf">> => [
+        action_schema(<<"source_list">>, #{<<"offset">> => Number, <<"count">> => Number#{<<"minimum">> := 1, <<"maximum">> => 32}}),
+        action_schema(<<"source_read">>, #{<<"path">> => String, <<"offset">> => Number,
+            <<"bytes">> => Number#{<<"minimum">> := 1, <<"maximum">> => 65536}}),
+        action_schema(<<"proposal">>, #{<<"patch">> => String, <<"hypothesis">> => String,
+            <<"expected_benefit">> => String, <<"risks">> => Strings, <<"requested_tests">> => Strings})]}.
+action_schema(Action, Properties) ->
+    Fields = Properties#{<<"action">> => #{<<"const">> => Action}},
+    #{<<"type">> => <<"object">>, <<"properties">> => Fields,
+        <<"required">> => lists:sort(maps:keys(Fields)), <<"additionalProperties">> => false}.
 
 content(#{<<"message">> := #{<<"content">> := Text}}) -> Text.
 
