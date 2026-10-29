@@ -21,6 +21,8 @@ def main():
             for app in ("ae_seed", "ae_protocol"):
                 shutil.copytree(checkout / "apps" / app, workspace / "apps" / app,
                     ignore=shutil.ignore_patterns("_build", "*.beam", "erl_crash.dump", "__pycache__"))
+            (workspace / "docs").mkdir()
+            shutil.copyfile(checkout / "docs/PROTOCOL.md", workspace / "docs/PROTOCOL.md")
             (workspace / ".gitignore").write_text("_build/\n**/_build/\n")
             run("git", "init", str(workspace))
             run("git", "add", ".", cwd=workspace)

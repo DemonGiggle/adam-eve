@@ -7,7 +7,7 @@
 -export([register_artifact/1, checkpoint/1, get_checkpoint/1, quiesce/2,
          new_deployment/3, staged/3, approve/2, reject/2, deployment/1,
          active_deployment/0, promote/4, rollback/5, complete/2, recover_handoff/0,
-         activate_checkpoint/3, runtime_failed/2]).
+         activate_checkpoint/3, runtime_failed/2, evolution/1]).
 
 start_link(Root) -> gen_server:start_link({local, ?MODULE}, ?MODULE, Root, []).
 boot(Manifest) -> call({boot, Manifest}).
@@ -40,6 +40,7 @@ complete(Id, Expected) -> call({complete, Id, Expected}).
 recover_handoff() -> call(recover_handoff).
 activate_checkpoint(Expected, Descriptor, Checkpoint) -> call({activate_checkpoint, Expected, Descriptor, Checkpoint}).
 runtime_failed(Expected, Reason) -> call({runtime_failed, Expected, Reason}).
+evolution(Operation) -> call({evolution, Operation}).
 call(Request) -> gen_server:call(?MODULE, Request, 15000).
 
 init(Root) ->
@@ -50,7 +51,7 @@ init(Root) ->
     _ = sql(Db, "PRAGMA synchronous=FULL", []),
     _ = sql(Db, "PRAGMA foreign_keys=ON", []),
     _ = sql(Db, "PRAGMA busy_timeout=5000", []),
-    lists:foreach(fun(Statement) -> sql(Db, Statement, []) end, schema()),
+    lists:foreach(fun(Statement) -> sql(Db, Statement, []) end, schema() ++ ae_evolution_store:schema()),
     transaction(Db, fun() ->
         case route(Db) of
             undefined -> ok;
@@ -67,6 +68,7 @@ handle_cast(_, Db) -> {noreply, Db}.
 handle_info(_, Db) -> {noreply, Db}.
 terminate(_, Db) -> sqlite3:close(Db).
 
+dispatch({evolution, Operation}, Db) -> ae_evolution_store:dispatch(Db, Operation);
 dispatch({boot, Manifest}, Db) ->
     case route(Db) of
         undefined ->
@@ -87,6 +89,7 @@ dispatch({activate, Expected, Instance}, Db) ->
                             <<"runtime_instance_id">> := Instance, <<"admission">> => <<"open">>},
             _ = sql(Db, "UPDATE routing SET data=? WHERE id=1", [jsx:encode(New)]),
             event(Db, <<"runtime_activated">>, New),
+            ae_evolution_store:dispatch(Db, reconcile),
             {ok, New};
         _ -> {error, stale_routing}
     end;
@@ -208,7 +211,7 @@ dispatch({activate_checkpoint, Expected, Descriptor, Checkpoint}, Db) ->
     require(maps:get(<<"slot">>, Descriptor) =:= maps:get(<<"slot">>, Expected) andalso
             maps:get(<<"artifact">>, Descriptor) =:= maps:get(<<"artifact">>, Expected), wrong_runtime),
     New = new_route(Expected, Descriptor, Checkpoint), save_route(Db, New),
-    event(Db, <<"runtime_activated">>, New), {ok, New};
+    event(Db, <<"runtime_activated">>, New), ae_evolution_store:dispatch(Db, reconcile), {ok, New};
 dispatch({checkpoint, Expected}, Db) ->
     require_baseline(Db, Expected),
     Seq = last(Db),
@@ -224,6 +227,7 @@ dispatch({get_checkpoint, Id}, Db) -> checkpoint_data(Db, Id);
 dispatch({new_deployment, Expected, Candidate, Limits}, Db) ->
     require_baseline(Db, Expected), require_open(Db),
     require(active_job(Db) =:= undefined, deployment_in_progress),
+    require(ae_evolution_store:dispatch(Db, active) =:= undefined, evolution_in_progress),
     require(maps:get(<<"parent">>, Candidate, null) =:=
         maps:get(<<"digest">>, maps:get(<<"artifact">>, Expected)), stale_candidate),
     ok = register_manifest(Db, Candidate),
