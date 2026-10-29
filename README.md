@@ -11,8 +11,10 @@ conversation and pending turns survive runtime replacement. Evolution is disable
 
 Phase 2 foundations now include a durable bounded authoring ledger, scoped
 paginated source access, a protected patch policy, and an optional restricted
-runtime backend. The authoring libraries are not yet wired to agent capabilities
-or an end-to-end builder. Consistent online backups and fenced restoration are
+runtime backend. The seed can read scoped source and submit budgeted structured
+LLM patches through an internal controller-authorized authoring exchange. The
+orchestrator, isolated builder and evaluator are still required before enabling
+evolution. Consistent online backups and fenced restoration are
 available through the operator commands in [docs/RECOVERY.md](docs/RECOVERY.md).
 See [docs/EVOLUTION.md](docs/EVOLUTION.md) and
 [docs/ISOLATION.md](docs/ISOLATION.md) for implemented behavior, required host

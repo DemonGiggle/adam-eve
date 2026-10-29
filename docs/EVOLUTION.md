@@ -1,13 +1,62 @@
 # Phase 2 foundations
 
-The durable authoring ledger, source reader, and patch policy are implemented.
-They are trusted controller libraries, not yet exposed as agent capabilities or
-CLI evolution commands. `evolution_enabled` remains false. The orchestrating
+The durable authoring ledger, source reader, patch policy and an agent-side
+`seed_evolver` are implemented. An internal `ae_router:author/1` exchanges a
+controller-authorized job with the active runtime. The source/status and budgeted
+LLM broker capabilities are available only during that exchange, bound to its
+job, generation, authenticated runtime and epoch. There is no CLI evolution
+command yet, and `evolution_enabled` remains false. The orchestrating
 `ae_evolution` state machine, `seed_evolver`, broker integration, isolated builder,
 independent scorecard, and publication/retention recovery remain
 required before the Phase 2 exit criterion can be claimed.
 The fixed reproducible seed recipe is available separately; see [BUILD.md](BUILD.md).
 Operator backup/restore and its local recovery drill are in [RECOVERY.md](RECOVERY.md).
+
+## Authoring path
+
+Newly published seeds declare `source_list`, `source_read`, `evolution_status`,
+`evolution_llm` and `evolution_propose` in their capability manifest. Earlier
+conversation-only releases still boot, but cannot be sent an authoring job.
+Adding capabilities to an existing identity requires the normal explicit manual
+deployment approval, bound to that manifest. No job or agent request changes the
+manifest or creates a controller-authorized objective on its own.
+
+`seed_evolver` asks the broker for public job status, then asks the configured
+Ollama adapter for a JSON source-list/read action or a complete unified patch
+with structured rationale. Source reads support paginated paths and byte ranges;
+the strategy keeps bounded recent authoring context instead of requiring the
+whole repository in one prompt. Proposal identities include the durable job and
+attempt number, and all repairs remain against the original pinned baseline.
+The authoring exchange has a request-count ceiling and a deadline even if a
+misbehaving seed continuously sends already-buffered messages. User turns are
+temporarily busy during authoring; health/status and recovery stay in the trusted
+controller. After an accepted proposal or an ordinary authoring failure, the seed
+can resume conversations. Protocol violations stop and fence the runtime.
+
+Authoring LLM calls reserve their full configured token/cost bound before HTTP.
+The reservation is split between the provider's context window (`num_ctx`) and
+output limit (`num_predict`), with neither unlimited. Successful authoring
+responses require nonnegative provider usage counts within those bounds; missing
+accounting is rejected, and an accounting violation cancels the job. Cached prompt
+usage is counted conservatively as additional input. The provider must honor its
+requested limits; this is a trust boundary with the configured inference service,
+not an independent tokenizer or control of its host resources. See the official
+[Ollama parameter reference](https://docs.ollama.com/modelfile) and
+[chat response fields](https://docs.ollama.com/api/chat).
+
+Completed calls replay their durable result without HTTP. An unresolved reserved
+call is never automatically reissued. Provider errors consume the reservation,
+and call-ID reuse with changed messages is rejected. Conversation context and
+authoring context use separate broker entry points, preventing an ordinary user
+turn from invoking source tools by changing a tool name.
+
+`test/integration/authoring.py` exercises an actual published seed/BEAM runtime,
+Unix IPC, scoped Git source and a fixture HTTP provider. It verifies source
+pagination/ranges, structured patch submission, proposal/call deduplication,
+unknown-call denial, budget exhaustion, protected paths, prose-only rejection,
+required usage accounting, and continued conversation service. The accepted
+patch is data in the ledger; this test does not execute or promote generated
+code and does not establish live-model authoring quality.
 
 ## Ledger and budgets
 

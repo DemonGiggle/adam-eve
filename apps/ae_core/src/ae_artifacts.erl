@@ -13,8 +13,11 @@ load(Root, Digest) ->
 
 verify(Root, #{<<"digest">> := Digest, <<"source_revision">> := Revision,
                <<"source_tree">> := Tree, <<"otp_release">> := Otp, <<"erts_version">> := Erts,
-               <<"capabilities">> := [<<"memory_read">>, <<"llm">>],
+               <<"capabilities">> := Capabilities,
                <<"state_schema_versions">> := [1]} = Manifest) ->
+    true = lists:member(Capabilities, [[<<"memory_read">>, <<"llm">>],
+        [<<"memory_read">>, <<"llm">>, <<"source_list">>, <<"source_read">>,
+         <<"evolution_status">>, <<"evolution_llm">>, <<"evolution_propose">>]]),
     true = hex(Digest, 64),
     true = hex(Revision, 40),
     true = hex(Tree, 40),

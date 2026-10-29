@@ -1,7 +1,7 @@
 -module(ae_runtime_worker).
 -behaviour(gen_server).
 -export([start_link/3, turn/4, auth/1, health/1, os_pid/1, descriptor/1,
-         activate/2, restore/2, simulate/1]).
+         activate/2, restore/2, simulate/1, author/2]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
 
 start_link(Root, Routing, Config) -> gen_server:start_link(?MODULE, {Root, Routing, Config}, []).
@@ -13,6 +13,7 @@ descriptor(Pid) -> gen_server:call(Pid, descriptor).
 activate(Pid, Route) -> gen_server:call(Pid, {activate, Route}).
 restore(Pid, Checkpoint) -> gen_server:call(Pid, {restore, Checkpoint}, 10000).
 simulate(Pid) -> gen_server:call(Pid, simulate, 10000).
+author(Pid, Job) -> gen_server:call(Pid, {author, Job}, 315000).
 
 init({Root, Routing, Config}) ->
     process_flag(trap_exit, true),
@@ -87,6 +88,37 @@ handle_call(health, _, #{socket := Socket} = State) ->
         _ -> {error, unhealthy}
     end,
     {reply, Reply, State};
+handle_call({author, Job}, _, #{mode := active, socket := Socket, auth := Auth} = State) ->
+    Id = maps:get(<<"id">>, Job),
+    ArtifactManifest = maps:get(<<"artifact">>, maps:get(descriptor, State)),
+    Authorization = case lists:member(<<"evolution_propose">>, maps:get(<<"capabilities">>, ArtifactManifest)) of
+        true -> ae_store:evolution({authorize, Auth, Id});
+        false -> {error, authoring_not_supported}
+    end,
+    case Authorization of
+        {ok, #{<<"status">> := <<"proposing">>} = Current} ->
+            Base = maps:get(<<"baseline">>, Current), Artifact = maps:get(<<"artifact">>, Base),
+            Context = #{<<"job_id">> => Id, <<"origin_ref">> => maps:get(<<"origin_ref">>, Current),
+                <<"base_generation">> => maps:get(<<"digest">>, Artifact),
+                <<"base_artifact">> => maps:get(<<"digest">>, Artifact),
+                <<"base_source_revision">> => maps:get(<<"source_revision">>, Artifact),
+                <<"source_manifest_ref">> => maps:get(<<"source_revision">>, Artifact),
+                <<"base_epoch">> => maps:get(<<"epoch">>, Base),
+                <<"objective">> => maps:get(<<"objective">>, Current),
+                <<"target_slot">> => maps:get(<<"target_slot">>, Current), <<"limits">> => maps:get(<<"limits">>, Current)},
+            ok = send(Socket, <<"evolution_context">>, Context),
+            ok = author_feedback(Socket, Current),
+            Remaining = max(0, min(300000, maps:get(<<"deadline">>, Current) - erlang:system_time(millisecond))),
+            Limits = maps:get(<<"limits">>, Current),
+            Requests = maps:get(<<"max_source_calls">>, Limits) + maps:get(<<"max_llm_calls">>, Limits) + 1,
+            Reply = author_exchange(State, Id, erlang:monotonic_time(millisecond) + Remaining, Requests),
+            case Reply of
+                {error, authoring_protocol_failure} -> {stop, normal, Reply, State};
+                _ -> {reply, Reply, State}
+            end;
+        {ok, _} -> {reply, {error, invalid_job_state}, State};
+        Error -> {reply, Error, State}
+    end;
 handle_call({turn, Request, Session, Message}, _, #{mode := active, socket := Socket, auth := {_, _, Epoch}} = State) ->
     Turn = #{<<"request_id">> => Request, <<"session_id">> => Session,
         <<"epoch">> => Epoch, <<"message">> => Message, <<"memory_cursor">> => ae_store:last_seq()},
@@ -132,6 +164,44 @@ exchange(#{socket := Socket, auth := Auth, deadline := Deadline} = State, Reques
         {ok, #{<<"type">> := <<"turn_failed">>, <<"request_id">> := Request,
                <<"reason">> := Reason}} -> {error, Reason};
         _ -> {error, runtime_protocol_failure}
+    end.
+
+author_feedback(Socket, #{<<"public_diagnostics">> := _} = Job) ->
+    Id = maps:get(<<"id">>, Job), Limits = maps:get(<<"limits">>, Job),
+    Remaining = #{<<"attempts">> => maps:get(<<"max_attempts">>, Limits) - maps:get(<<"attempts">>, Job),
+        <<"llm_calls">> => maps:get(<<"max_llm_calls">>, Limits) - maps:get(<<"llm_calls">>, Job),
+        <<"tokens">> => maps:get(<<"max_tokens">>, Limits) - maps:get(<<"reserved_tokens">>, Job),
+        <<"time_ms">> => max(0, maps:get(<<"deadline">>, Job) - erlang:system_time(millisecond))},
+    send(Socket, <<"evolution_feedback">>, #{<<"job_id">> => Id, <<"attempt_id">> => maps:get(<<"attempts">>, Job),
+        <<"outcome">> => <<"repair_requested">>, <<"diagnostics_ref">> => Id,
+        <<"evaluation_summary_ref">> => Id, <<"remaining_budget">> => Remaining});
+author_feedback(_, _) -> ok.
+
+author_exchange(State, Id, Deadline, Requests) ->
+    Remaining = Deadline - erlang:monotonic_time(millisecond),
+    case Remaining > 0 of
+        true -> author_receive(State, Id, Deadline, Requests, Remaining);
+        false -> {error, authoring_protocol_failure}
+    end.
+
+author_receive(#{socket := Socket, auth := {_, _, Epoch} = Auth} = State, Id, Deadline, Requests, Remaining) ->
+    case ae_protocol:recv(Socket, Remaining) of
+        {ok, #{<<"type">> := <<"tool_request">>, <<"request_id">> := Id, <<"epoch">> := Epoch,
+               <<"idempotency_key">> := Key} = Message} when Requests > 0 ->
+            Result = case ae_tool_broker:request_evolution(Auth, Id, Message) of
+                {ok, Value} -> Value;
+                {error, Reason} when is_atom(Reason) -> #{<<"error">> => atom_to_binary(Reason, utf8)};
+                _ -> #{<<"error">> => <<"authoring_denied">>}
+            end,
+            ok = send(Socket, <<"tool_result">>, #{<<"request_id">> => Id,
+                <<"idempotency_key">> => Key, <<"result">> => Result}),
+            author_exchange(State, Id, Deadline, Requests - 1);
+        {ok, #{<<"type">> := <<"evolution_proposal">>, <<"job_id">> := Id, <<"epoch">> := Epoch} = Message} ->
+            Proposal = maps:without([<<"type">>, <<"protocol_version">>, <<"job_id">>], Message),
+            ae_store:evolution({proposal, Auth, Id, Proposal});
+        {ok, #{<<"type">> := <<"evolution_failed">>, <<"job_id">> := Id, <<"epoch">> := Epoch,
+               <<"reason">> := Reason}} -> {error, Reason};
+        _ -> {error, authoring_protocol_failure}
     end.
 
 broker(#{mode := simulation}, _, Request, Message) ->

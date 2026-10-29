@@ -1,11 +1,18 @@
 -module(ae_tool_broker).
 -behaviour(gen_server).
--export([start_link/1, request/3]).
+-export([start_link/1, request/3, request_evolution/3]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2]).
 
 start_link(Config) -> gen_server:start_link({local, ?MODULE}, ?MODULE, Config, []).
 request(Auth, Request, Message) -> gen_server:call(?MODULE, {tool, Auth, Request, Message}, 310000).
+request_evolution(Auth, Job, Message) -> gen_server:call(?MODULE, {evolution_tool, Auth, Job, Message}, 310000).
 init(Config) -> {ok, Config}.
+handle_call({evolution_tool, Auth, Job, Message}, _, Config) ->
+    Reply = case ae_store:authorized(Auth) of
+        ok -> ae_authoring_broker:request(Auth, Job, Message, Config);
+        Error -> Error
+    end,
+    {reply, Reply, Config};
 handle_call({tool, Auth, Request, Message}, _, Config) ->
     Reply = case ae_store:authorized(Auth) of
         ok -> authorize(Auth, Request, Message, Config);

@@ -38,6 +38,15 @@ message(#{<<"type">> := <<"restore">>, <<"last_event_seq">> := Seq},
 message(#{<<"type">> := <<"user_turn">>} = Turn, #{socket := Socket} = State) ->
     ok = tool(Socket, Turn, <<"memory_read">>, #{}),
     State#{turn := Turn, phase => memory};
+message(#{<<"type">> := <<"evolution_context">>} = Context, #{socket := Socket, turn := undefined} = State) ->
+    State#{evolution => seed_evolver:start(Socket, Context)};
+message(#{<<"type">> := <<"evolution_feedback">>, <<"job_id">> := Id} = Feedback,
+        #{evolution := #{context := #{<<"job_id">> := Id}} = Evolution} = State) ->
+    State#{evolution := seed_evolver:feedback(Feedback, Evolution)};
+message(#{<<"type">> := <<"tool_result">>, <<"request_id">> := Id, <<"idempotency_key">> := Key,
+          <<"result">> := Result},
+        #{socket := Socket, evolution := #{context := #{<<"job_id">> := Id}, key := Key} = Evolution} = State) ->
+    State#{evolution := seed_evolver:result(Socket, Result, Evolution)};
 message(#{<<"type">> := <<"tool_result">>, <<"request_id">> := Request,
           <<"result">> := Result},
         #{socket := Socket, turn := #{<<"request_id">> := Request} = Turn,

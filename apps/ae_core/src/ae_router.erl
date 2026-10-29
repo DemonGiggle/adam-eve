@@ -1,6 +1,6 @@
 -module(ae_router).
 -behaviour(gen_server).
--export([start_link/1, turn/3, restart/0, status/0, promote/2, rollback/2, check/1, restore_ready/2]).
+-export([start_link/1, turn/3, restart/0, status/0, promote/2, rollback/2, check/1, restore_ready/2, author/1]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
 
 start_link(Config) -> gen_server:start_link({local, ?MODULE}, ?MODULE, Config, []).
@@ -11,6 +11,7 @@ promote(Id, Pid) -> gen_server:call(?MODULE, {promote, Id, Pid}, 400000).
 rollback(Id, Reason) -> gen_server:call(?MODULE, {rollback, Id, Reason}, 65000).
 check(Expected) -> gen_server:call(?MODULE, {check, Expected}, 10000).
 restore_ready(BackupId, Origin) -> gen_server:call(?MODULE, {restore_ready, BackupId, Origin}, 15000).
+author(Id) -> gen_server:call(?MODULE, {author, Id}, 320000).
 
 init(#{root := Root} = Config) ->
     ok = ae_runtime_sup:stop_all(),
@@ -53,6 +54,28 @@ handle_call({turn, Request, Session, Message}, From, State) ->
                 Error -> {reply, Error, State}
             end;
         {Error, _, _, _} -> {reply, Error, State}
+    end;
+handle_call({author, Id}, From, State) ->
+    case {maps:get(runtime, State), maps:get(inflight, State), maps:get(handoff, State)} of
+        {undefined, _, _} -> {reply, {error, runtime_unavailable}, State};
+        {Runtime, undefined, undefined} ->
+            case safe_auth(Runtime) of
+                {ok, Auth} ->
+                    case ae_store:evolution({authorize, Auth, Id}) of
+                        {ok, Job} ->
+                            Parent = self(), Ref = make_ref(),
+                            Worker = spawn(fun() ->
+                                Reply = try ae_runtime_worker:author(Runtime, Job)
+                                        catch exit:_ -> {error, runtime_unavailable} end,
+                                Parent ! {author_result, Ref, Reply}
+                            end),
+                            {noreply, State#{inflight := #{ref => Ref, worker => Worker, from => From,
+                                                           request => Id, auth => Auth}}};
+                        Error -> {reply, Error, State}
+                    end;
+                Error -> {reply, Error, State}
+            end;
+        _ -> {reply, {error, service_busy}, State}
     end;
 handle_call({restore_ready, BackupId, Origin}, _, State) ->
     Reply = case maps:get(runtime, State) of
@@ -120,6 +143,10 @@ handle_call({rollback, Id, Reason}, _, State) ->
     {Reply, Next} = restore_previous(Id, Reason, State), {reply, Reply, Next}.
 
 handle_cast(_, State) -> {noreply, State}.
+handle_info({author_result, Ref, Reply}, #{inflight := #{ref := Ref} = Turn} = State) ->
+    gen_server:reply(maps:get(from, Turn), Reply),
+    Next = State#{inflight := undefined},
+    case maps:get(handoff, Next) of undefined -> {noreply, Next}; _ -> finish_handoff(Next) end;
 handle_info({turn_result, Ref, Result}, #{inflight := #{ref := Ref} = Turn} = State) ->
     Reply = case Result of
         {ok, Text} -> ae_store:finish_turn(maps:get(auth, Turn), maps:get(request, Turn), Text);
