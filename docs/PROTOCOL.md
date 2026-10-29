@@ -126,7 +126,9 @@ See [EVOLUTION.md](EVOLUTION.md) for provider accounting and remaining gates.
 - Controller may send `shutdown {reason}`. Closing the authenticated socket also
   terminates the seed process.
 
-Bootstrap and health operations have five-second deadlines. A turn has one
+Bootstrap operations use `AE_RUNTIME_START_TIMEOUT_MS` (five seconds by default,
+100–30000 ms). Connection, authentication and initial restore share one startup
+deadline; health probes have five-second deadlines. A turn has one
 deadline of the configured provider timeout plus ten seconds, with a fixed
 number of broker exchanges. Controller writes always recheck durable fencing;
 old runtime instances cannot commit replies or tool results after replacement.

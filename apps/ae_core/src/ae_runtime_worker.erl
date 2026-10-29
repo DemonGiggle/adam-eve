@@ -11,12 +11,13 @@ health(Pid) -> gen_server:call(Pid, health, 10000).
 os_pid(Pid) -> gen_server:call(Pid, os_pid).
 descriptor(Pid) -> gen_server:call(Pid, descriptor).
 activate(Pid, Route) -> gen_server:call(Pid, {activate, Route}).
-restore(Pid, Checkpoint) -> gen_server:call(Pid, {restore, Checkpoint}, 10000).
+restore(Pid, Checkpoint) -> gen_server:call(Pid, {restore, Checkpoint}, 35000).
 simulate(Pid) -> gen_server:call(Pid, simulate, 10000).
 author(Pid, Job) -> gen_server:call(Pid, {author, Job}, 315000).
 
 init({Root, Routing, Config}) ->
     process_flag(trap_exit, true),
+    StartTimeout = maps:get(runtime_start_timeout, Config, 5000),
     Manifest = maps:get(<<"artifact">>, Routing),
     ok = ae_artifacts:verify(Root, Manifest),
     Instance = hex(crypto:strong_rand_bytes(16)),
@@ -30,26 +31,27 @@ init({Root, Routing, Config}) ->
         try
             ok = file:change_mode(Path, 8#600),
             {Executable, Args} = ae_sandbox:runtime(Root, Manifest, Directory, #{token => Token, config => Config}),
+            StartDeadline = erlang:monotonic_time(millisecond) + StartTimeout,
             Port = open_port({spawn_executable, Executable},
                 [binary, exit_status, use_stdio, {env, ae_os:clean_env()},
                  {args, Args}]),
             try
-                {ok, Socket} = gen_tcp:accept(Listen, 5000),
+                {ok, Socket} = gen_tcp:accept(Listen, start_remaining(StartDeadline)),
                 {ok, #{<<"type">> := <<"authenticate">>, <<"token">> := Token}} =
-                    ae_protocol:recv(Socket, 5000),
+                    ae_protocol:recv(Socket, start_remaining(StartDeadline)),
                 Generation = maps:get(<<"digest">>, Manifest),
                 ok = send(Socket, <<"hello">>, #{<<"slot">> => maps:get(<<"slot">>, Routing),
                     <<"runtime_instance_id">> => Instance, <<"generation">> => Generation,
                     <<"capabilities">> => maps:get(<<"capabilities">>, Manifest)}),
                 Checkpoint = maps:get(restore_checkpoint, Config,
                     #{<<"checkpoint_id">> => <<"synthetic-stage">>, <<"last_event_seq">> => 0}),
-                ok = restore_socket(Socket, Generation, Checkpoint),
+                ok = restore_socket(Socket, Generation, Checkpoint, start_remaining(StartDeadline)),
                 Descriptor = #{<<"slot">> => maps:get(<<"slot">>, Routing),
                     <<"runtime_instance_id">> => Instance, <<"artifact">> => Manifest},
                 Auth = {maps:get(<<"slot">>, Routing), Instance, 0},
                 {ok, #{socket => Socket, port => Port, directory => Directory,
                        auth => Auth, descriptor => Descriptor, mode => standby,
-                       timeout => maps:get(llm_timeout, Config) + 10000}}
+                       timeout => maps:get(llm_timeout, Config) + 10000, start_timeout => StartTimeout}}
             catch Class:Reason:Stack ->
                 catch port_close(Port), erlang:raise(Class, Reason, Stack)
             end
@@ -68,7 +70,7 @@ handle_call({activate, Route}, _, #{descriptor := Descriptor} = State) ->
     end;
 handle_call({restore, Checkpoint}, _, #{socket := Socket, descriptor := Descriptor} = State) ->
     Generation = maps:get(<<"digest">>, maps:get(<<"artifact">>, Descriptor)),
-    Reply = restore_socket(Socket, Generation, Checkpoint),
+    Reply = restore_socket(Socket, Generation, Checkpoint, maps:get(start_timeout, State)),
     {reply, Reply, State#{mode := standby}};
 handle_call(simulate, _, #{mode := standby, socket := Socket} = State) ->
     Request = <<"synthetic-probe">>,
@@ -217,11 +219,11 @@ broker(#{mode := simulation}, _, Request, Message) ->
     end;
 broker(_, Auth, Request, Message) -> ae_tool_broker:request(Auth, Request, Message).
 
-restore_socket(Socket, Generation, #{<<"checkpoint_id">> := Id, <<"last_event_seq">> := Seq}) ->
+restore_socket(Socket, Generation, #{<<"checkpoint_id">> := Id, <<"last_event_seq">> := Seq}, Timeout) ->
     case send(Socket, <<"restore">>, #{<<"checkpoint_id">> => Id,
             <<"state_schema_version">> => 1, <<"last_event_seq">> => Seq}) of
         ok ->
-            case ae_protocol:recv(Socket, 5000) of
+            case ae_protocol:recv(Socket, Timeout) of
                 {ok, #{<<"type">> := <<"ready">>, <<"generation">> := Generation,
                     <<"restored_seq">> := Seq, <<"supported_schema_versions">> := [1]}} -> ok;
                 _ -> {error, restore_failed}
@@ -231,4 +233,7 @@ restore_socket(Socket, Generation, #{<<"checkpoint_id">> := Id, <<"last_event_se
 
 send(Socket, Type, Fields) ->
     ae_protocol:send(Socket, Fields#{<<"type">> => Type, <<"protocol_version">> => 1}).
+start_remaining(Deadline) ->
+    Remaining = Deadline - erlang:monotonic_time(millisecond),
+    true = Remaining > 0, Remaining.
 hex(Bytes) -> list_to_binary(lists:flatten([io_lib:format("~2.16.0b", [B]) || <<B>> <= Bytes])).

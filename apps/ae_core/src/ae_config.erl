@@ -15,6 +15,7 @@ load() ->
     true = lists:member(Host, ["127.0.0.1", "localhost", "::1"]),
     maps:merge(isolation(), #{root => Root, model => Model, url => Url,
       llm_timeout => integer_env("AE_LLM_TIMEOUT_MS", 30000, 100, 300000),
+      runtime_start_timeout => integer_env("AE_RUNTIME_START_TIMEOUT_MS", 5000, 100, 30000),
       max_tokens => integer_env("AE_LLM_MAX_TOKENS", 512, 1, 8192),
       context_turns => integer_env("AE_CONTEXT_TURNS", 8, 1, 8),
       max_llm_attempts => integer_env("AE_MAX_LLM_ATTEMPTS", 3, 1, 10),

@@ -6,7 +6,9 @@
 start_link(Config) -> gen_server:start_link({local, ?MODULE}, ?MODULE, Config, []).
 turn(Request, Session, Message) -> gen_server:call(?MODULE, {turn, Request, Session, Message}, 320000).
 restart() -> gen_server:call(?MODULE, restart, 65000).
-status() -> gen_server:call(?MODULE, status, 10000).
+%% Automatic recovery can be completing a configured runtime startup before
+%% servicing this query. Its bounded startup must fit the public call timeout.
+status() -> gen_server:call(?MODULE, status, 65000).
 promote(Id, Pid) -> gen_server:call(?MODULE, {promote, Id, Pid}, 400000).
 rollback(Id, Reason) -> gen_server:call(?MODULE, {rollback, Id, Reason}, 65000).
 check(Expected) -> gen_server:call(?MODULE, {check, Expected}, 10000).
