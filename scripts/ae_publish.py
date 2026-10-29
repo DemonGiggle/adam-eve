@@ -9,6 +9,7 @@ import tempfile
 import fcntl
 import sys
 from contextlib import contextmanager
+from ae_build import build_manual
 
 
 def run(*args, cwd=None):
@@ -71,12 +72,13 @@ def publish(root, workspace, parent=None, objective="Trusted boot seed"):
         "user.email=bootstrap@localhost", "commit", "-m", objective, cwd=workspace)
     revision = run("git", "rev-parse", "HEAD", cwd=workspace)
     tree = run("git", "rev-parse", "HEAD^{tree}", cwd=workspace)
-    print("Building frozen agent source...", file=sys.stderr, flush=True)
-    subprocess.run(["rebar3", "escriptize"], cwd=workspace / "apps/ae_seed", check=True, stdout=sys.stderr)
+    print("Building frozen agent source with the fixed compiler recipe...", file=sys.stderr, flush=True)
+    output = workspace / "_build/controller-recipe/seed"
+    provenance = build_manual(workspace, revision, tree, parent, output, trusted_manual=True)
     run("git", "diff", "--exit-code", "HEAD", cwd=workspace)
     if run("git", "ls-files", "--others", "--exclude-standard", cwd=workspace):
         raise RuntimeError("build introduced unlocked source inputs; run scripts/build first")
-    executable = (workspace / "apps/ae_seed/_build/default/bin/seed").read_bytes()
+    executable = output.read_bytes()
     digest = hashlib.sha256(executable).hexdigest()
     manifest = {
         "digest": digest,
@@ -88,7 +90,8 @@ def publish(root, workspace, parent=None, objective="Trusted boot seed"):
                             'io:format("~s", [erlang:system_info(version)]), halt().'),
         "capabilities": ["memory_read", "llm"],
         "state_schema_versions": [1],
-        "build_recipe": "apps/ae_seed: rebar3 escriptize",
+        "build_recipe": "ae_seed_v1",
+        "build_provenance": provenance,
         "rebar_version": run("rebar3", "version"),
         "parent": parent,
         "objective": objective,

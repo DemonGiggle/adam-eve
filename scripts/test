@@ -3,6 +3,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 scripts/build
 rebar3 eunit
+python3 -m unittest discover -s test/build -v
 python3 test/integration/phase0.py
 python3 test/integration/phase1.py
 python3 -m unittest discover -s test/sandbox -v

@@ -163,6 +163,9 @@ schema, and recorded OTP/ERTS versions. The seed never loads into the controller
 VM. Disposable workspaces can be removed without losing retained code or state.
 
 The runtime protocol is documented in [docs/PROTOCOL.md](docs/PROTOCOL.md).
+Published seeds now use a fixed, reproducible compiler recipe with pinned
+dependency-package verification and embedded provenance. The trusted manual
+build path and its limits are documented in [docs/BUILD.md](docs/BUILD.md).
 
 Run all checks without an installed model or provider credentials:
 
@@ -190,5 +193,5 @@ Fully verified restricted execution, portable checkpoint export, additional prod
 effects, isolated candidate builds/evaluation, self-evolution,
 retention cleanup, and backup/restore drills remain in the later spec phases.
 The escript retains compiled code and dependencies; its recorded host ERTS must
-remain installed. Reproducible sandbox builds and self-contained runtime releases
-remain future work. No live-model quality claim is made by the fixture tests.
+remain installed. An integrated isolated builder and self-contained runtime
+releases remain future work. No live-model quality claim is made by the fixture tests.
