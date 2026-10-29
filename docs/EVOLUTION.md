@@ -59,7 +59,8 @@ The trigger returns the durable job. Reusing its origin with the same objective
 and limits returns that job, including after a terminal outcome, runtime fencing,
 or restart; changed objective/limits return `origin_conflict`. Use a new origin
 for a new improvement. Only one job or manual deployment can own the identity.
-Job inspection includes the source patch/lineage, exact artifact manifest,
+Job inspection includes the current attempt's complete proposal (source patch,
+hypothesis, expected benefit, risks, and requested tests), lineage, exact artifact manifest,
 independent scorecard and rollback gate. Once standby checks pass, it also
 includes `deployment_id` and `approval_binding`. Inspect those and the retained
 source diff, then use the existing explicit approval command:

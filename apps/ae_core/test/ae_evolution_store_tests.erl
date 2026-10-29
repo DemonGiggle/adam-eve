@@ -18,6 +18,8 @@ reservation_and_repair_survive_restart_test() ->
         ?assertEqual({error, call_conflict}, e({reserve_llm, Auth, Id, <<"call-1">>, ae_policy:digest(<<"changed">>)})),
         Proposal = proposal(<<"p1">>, patch()),
         {ok, Accepted} = e({proposal, Auth, Id, Proposal}),
+        {ok, Review} = ae_evolution:job(Id),
+        ?assertEqual(Accepted, maps:get(<<"proposal">>, Review)),
         ?assertEqual(ae_policy:sha256(patch()), maps:get(<<"patch_hash">>, Accepted)),
         ?assertEqual({ok, {existing, Accepted}}, e({proposal, Auth, Id, Proposal})),
         ?assertEqual({error, proposal_conflict}, e({proposal, Auth, Id, Proposal#{<<"hypothesis">> := <<"changed">>}})),

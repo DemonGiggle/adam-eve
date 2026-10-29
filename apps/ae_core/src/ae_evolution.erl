@@ -221,7 +221,11 @@ valid_id(Id) -> is_binary(Id) andalso re:run(Id, <<"^[0-9a-f]{64}$">>, [{capture
 text(Value, Max) -> is_binary(Value) andalso byte_size(Value) > 0 andalso byte_size(Value) =< Max.
 get_job(Id) ->
     case ae_store:evolution({get, Id}) of
-        Job when is_map(Job) ->
+        Stored when is_map(Stored) ->
+            Job = case maps:get(<<"attempts">>, Stored) of
+                0 -> Stored;
+                Attempt -> Stored#{<<"proposal">> => ae_store:evolution({attempt, Id, Attempt})}
+            end,
             case maps:find(<<"deployment_id">>, Job) of
                 {ok, DepId} ->
                     Dep = ae_store:deployment(DepId), Extra = #{<<"deployment">> => Dep},
