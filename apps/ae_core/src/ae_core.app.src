@@ -1,7 +1,7 @@
 {application, ae_core, [
     {description, "Trusted adam-eve controller"},
     {vsn, "0.1.0"},
-    {registered, [ae_sup, ae_store, ae_tool_broker, ae_runtime_sup, ae_router]},
+    {registered, [ae_sup, ae_store, ae_tool_broker, ae_runtime_sup, ae_router, ae_deployment]},
     {mod, {ae_app, []}},
     {applications, [kernel, stdlib, crypto, inets, ssl, sqlite3, ae_protocol]},
     {modules, []}

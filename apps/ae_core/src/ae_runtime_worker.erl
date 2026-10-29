@@ -1,6 +1,7 @@
 -module(ae_runtime_worker).
 -behaviour(gen_server).
--export([start_link/3, turn/4, auth/1, health/1, os_pid/1]).
+-export([start_link/3, turn/4, auth/1, health/1, os_pid/1, descriptor/1,
+         activate/2, restore/2, simulate/1]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
 
 start_link(Root, Routing, Config) -> gen_server:start_link(?MODULE, {Root, Routing, Config}, []).
@@ -8,6 +9,10 @@ turn(Pid, Request, Session, Message) -> gen_server:call(Pid, {turn, Request, Ses
 auth(Pid) -> gen_server:call(Pid, auth).
 health(Pid) -> gen_server:call(Pid, health, 10000).
 os_pid(Pid) -> gen_server:call(Pid, os_pid).
+descriptor(Pid) -> gen_server:call(Pid, descriptor).
+activate(Pid, Route) -> gen_server:call(Pid, {activate, Route}).
+restore(Pid, Checkpoint) -> gen_server:call(Pid, {restore, Checkpoint}, 10000).
+simulate(Pid) -> gen_server:call(Pid, simulate, 10000).
 
 init({Root, Routing, Config}) ->
     process_flag(trap_exit, true),
@@ -34,16 +39,15 @@ init({Root, Routing, Config}) ->
                 ok = send(Socket, <<"hello">>, #{<<"slot">> => maps:get(<<"slot">>, Routing),
                     <<"runtime_instance_id">> => Instance, <<"generation">> => Generation,
                     <<"capabilities">> => maps:get(<<"capabilities">>, Manifest)}),
-                Seq = ae_store:last_seq(),
-                ok = send(Socket, <<"restore">>, #{<<"checkpoint_id">> => <<"event-log">>,
-                    <<"state_schema_version">> => 1, <<"last_event_seq">> => Seq}),
-                {ok, #{<<"type">> := <<"ready">>, <<"generation">> := Generation,
-                       <<"restored_seq">> := Seq, <<"supported_schema_versions">> := [1]}} =
-                    ae_protocol:recv(Socket, 5000),
-                {ok, Active} = ae_store:activate(Routing, Instance),
-                Auth = {maps:get(<<"slot">>, Active), Instance, maps:get(<<"epoch">>, Active)},
+                Checkpoint = maps:get(restore_checkpoint, Config,
+                    #{<<"checkpoint_id">> => <<"synthetic-stage">>, <<"last_event_seq">> => 0}),
+                ok = restore_socket(Socket, Generation, Checkpoint),
+                Descriptor = #{<<"slot">> => maps:get(<<"slot">>, Routing),
+                    <<"runtime_instance_id">> => Instance, <<"artifact">> => Manifest},
+                Auth = {maps:get(<<"slot">>, Routing), Instance, 0},
                 {ok, #{socket => Socket, port => Port, directory => Directory,
-                       auth => Auth, timeout => maps:get(llm_timeout, Config) + 10000}}
+                       auth => Auth, descriptor => Descriptor, mode => standby,
+                       timeout => maps:get(llm_timeout, Config) + 10000}}
             catch Class:Reason:Stack ->
                 catch port_close(Port), erlang:raise(Class, Reason, Stack)
             end
@@ -53,6 +57,24 @@ init({Root, Routing, Config}) ->
     end.
 
 handle_call(auth, _, #{auth := Auth} = State) -> {reply, Auth, State};
+handle_call(descriptor, _, #{descriptor := Descriptor} = State) -> {reply, Descriptor, State};
+handle_call({activate, Route}, _, #{descriptor := Descriptor} = State) ->
+    Auth = {maps:get(<<"slot">>, Route), maps:get(<<"runtime_instance_id">>, Route), maps:get(<<"epoch">>, Route)},
+    case maps:with(maps:keys(Descriptor), Route) =:= Descriptor andalso ae_store:authorized(Auth) =:= ok of
+        true -> {reply, ok, State#{auth := Auth, mode := active}};
+        false -> {reply, {error, stale_runtime}, State}
+    end;
+handle_call({restore, Checkpoint}, _, #{socket := Socket, descriptor := Descriptor} = State) ->
+    Generation = maps:get(<<"digest">>, maps:get(<<"artifact">>, Descriptor)),
+    Reply = restore_socket(Socket, Generation, Checkpoint),
+    {reply, Reply, State#{mode := standby}};
+handle_call(simulate, _, #{mode := standby, socket := Socket} = State) ->
+    Request = <<"synthetic-probe">>,
+    ok = send(Socket, <<"user_turn">>, #{<<"request_id">> => Request, <<"session_id">> => <<"synthetic">>,
+        <<"message">> => <<"contract probe">>, <<"epoch">> => 1, <<"memory_cursor">> => 0}),
+    Reply = exchange(State#{mode := simulation, deadline => erlang:monotonic_time(millisecond) + 5000},
+                     Request, [<<"memory_read">>, <<"llm">>]),
+    {reply, Reply, State};
 handle_call(os_pid, _, #{port := Port} = State) ->
     {os_pid, OsPid} = erlang:port_info(Port, os_pid), {reply, OsPid, State};
 handle_call(health, _, #{socket := Socket} = State) ->
@@ -64,7 +86,7 @@ handle_call(health, _, #{socket := Socket} = State) ->
         _ -> {error, unhealthy}
     end,
     {reply, Reply, State};
-handle_call({turn, Request, Session, Message}, _, #{socket := Socket, auth := {_, _, Epoch}} = State) ->
+handle_call({turn, Request, Session, Message}, _, #{mode := active, socket := Socket, auth := {_, _, Epoch}} = State) ->
     Turn = #{<<"request_id">> => Request, <<"session_id">> => Session,
         <<"epoch">> => Epoch, <<"message">> => Message, <<"memory_cursor">> => ae_store:last_seq()},
     case send(Socket, <<"user_turn">>, Turn) of
@@ -75,7 +97,8 @@ handle_call({turn, Request, Session, Message}, _, #{socket := Socket, auth := {_
                 Reply -> {reply, Reply, State}
             end;
         _ -> {stop, normal, {error, runtime_unavailable}, State}
-    end.
+    end;
+handle_call(_, _, State) -> {reply, {error, standby_runtime}, State}.
 handle_cast(_, State) -> {noreply, State}.
 handle_info({Port, {exit_status, _}}, #{port := Port} = State) -> {stop, normal, State};
 handle_info({'EXIT', Port, _}, #{port := Port} = State) -> {stop, normal, State};
@@ -94,7 +117,7 @@ exchange(#{socket := Socket, auth := Auth, deadline := Deadline} = State, Reques
                 when Remaining =/= [] ->
             case Remaining of
                 [Tool | Rest] ->
-                    case ae_tool_broker:request(Auth, Request, Message) of
+                    case broker(State, Auth, Request, Message) of
                         {ok, Result} ->
                             ok = send(Socket, <<"tool_result">>, #{<<"request_id">> => Request,
                                 <<"idempotency_key">> => Key, <<"result">> => Result}),
@@ -108,6 +131,31 @@ exchange(#{socket := Socket, auth := Auth, deadline := Deadline} = State, Reques
         {ok, #{<<"type">> := <<"turn_failed">>, <<"request_id">> := Request,
                <<"reason">> := Reason}} -> {error, Reason};
         _ -> {error, runtime_protocol_failure}
+    end.
+
+broker(#{mode := simulation}, _, Request, Message) ->
+    Messages = [#{<<"role">> => <<"user">>, <<"content">> => <<"contract probe">>}],
+    case Message of
+        #{<<"request_id">> := Request, <<"epoch">> := 1, <<"tool">> := <<"memory_read">>,
+          <<"args">> := Args, <<"idempotency_key">> := <<"memory_read">>} when map_size(Args) =:= 0 ->
+            {ok, #{<<"messages">> => Messages}};
+        #{<<"request_id">> := Request, <<"epoch">> := 1, <<"tool">> := <<"llm">>,
+          <<"args">> := #{<<"messages">> := Messages} = Args, <<"idempotency_key">> := <<"llm">>}
+                when map_size(Args) =:= 1 -> {ok, #{<<"text">> => <<"synthetic response">>}};
+        _ -> {error, denied}
+    end;
+broker(_, Auth, Request, Message) -> ae_tool_broker:request(Auth, Request, Message).
+
+restore_socket(Socket, Generation, #{<<"checkpoint_id">> := Id, <<"last_event_seq">> := Seq}) ->
+    case send(Socket, <<"restore">>, #{<<"checkpoint_id">> => Id,
+            <<"state_schema_version">> => 1, <<"last_event_seq">> => Seq}) of
+        ok ->
+            case ae_protocol:recv(Socket, 5000) of
+                {ok, #{<<"type">> := <<"ready">>, <<"generation">> := Generation,
+                    <<"restored_seq">> := Seq, <<"supported_schema_versions">> := [1]}} -> ok;
+                _ -> {error, restore_failed}
+            end;
+        _ -> {error, restore_failed}
     end.
 
 send(Socket, Type, Fields) ->

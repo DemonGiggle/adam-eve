@@ -37,6 +37,14 @@ command(#{<<"op">> := <<"turn">>, <<"request_id">> := Request,
     end;
 command(#{<<"op">> := <<"status">>}) -> ae_router:status();
 command(#{<<"op">> := <<"restart">>}) -> result(ae_router:restart());
+command(#{<<"op">> := <<"stage">>, <<"artifact_digest">> := Digest}) ->
+    case ae_deployment:stage(Digest) of {ok, Summary} -> Summary; Error -> result(Error) end;
+command(#{<<"op">> := <<"approve">>, <<"deployment_id">> := Id, <<"approval_binding">> := Binding}) ->
+    case ae_deployment:approve(Id, Binding) of
+        {ok, Route} -> #{<<"ok">> => true, <<"routing">> => Route}; Error -> result(Error) end;
+command(#{<<"op">> := <<"reject">>, <<"deployment_id">> := Id}) -> result(ae_deployment:reject(Id));
+command(#{<<"op">> := <<"deployment">>, <<"deployment_id">> := Id}) ->
+    case ae_store:deployment(Id) of undefined -> #{<<"error">> => <<"unknown_deployment">>}; Job -> Job end;
 command(#{<<"op">> := <<"retry">>, <<"request_id">> := Request}) -> result(ae_store:retry_turn(Request));
 command(#{<<"op">> := <<"cancel">>, <<"request_id">> := Request}) -> result(ae_store:cancel_turn(Request));
 command(#{<<"op">> := <<"history">>}) ->

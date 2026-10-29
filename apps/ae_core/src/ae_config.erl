@@ -17,7 +17,18 @@ load() ->
       llm_timeout => integer_env("AE_LLM_TIMEOUT_MS", 30000, 100, 300000),
       max_tokens => integer_env("AE_LLM_MAX_TOKENS", 512, 1, 8192),
       context_turns => integer_env("AE_CONTEXT_TURNS", 8, 1, 8),
-      max_llm_attempts => integer_env("AE_MAX_LLM_ATTEMPTS", 3, 1, 10)}.
+      max_llm_attempts => integer_env("AE_MAX_LLM_ATTEMPTS", 3, 1, 10),
+      handoff_limits => handoff_limits()}.
+
+handoff_limits() ->
+    try
+        maps:from_list([{Key, list_to_integer(required(Name))} || {Key, Name} <-
+            [{<<"approval_ttl_ms">>, "AE_APPROVAL_TTL_MS"}, {<<"observe_ms">>, "AE_OBSERVE_MS"},
+             {<<"health_interval_ms">>, "AE_HEALTH_INTERVAL_MS"}, {<<"quiesce_ms">>, "AE_QUIESCE_TIMEOUT_MS"}]])
+    of
+        Limits ->
+            true = lists:all(fun(V) -> V > 0 andalso V =< 300000 end, maps:values(Limits)), Limits
+    catch _:_ -> undefined end.
 
 required(Name) ->
     case os:getenv(Name) of false -> error({required_configuration, Name}); "" -> error({required_configuration, Name}); V -> V end.

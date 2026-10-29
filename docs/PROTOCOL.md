@@ -1,7 +1,8 @@
-# Runtime protocol v1 — Phase 0
+# Runtime protocol v1 — manual dual-slot handoff
 
 This is the implemented subset of [SPEC.md](SPEC.md), Section 7. Future evolution,
-quiescing, and checkpoint-export messages are rejected until implemented.
+agent checkpoint-export, and `quiesce` wire messages are rejected until implemented.
+Admission, draining, and authoritative checkpoints are controller-owned.
 
 Each frame is a four-byte unsigned big-endian byte length followed by a UTF-8
 JSON object. Frames are bounded to 1 MiB. Every object contains
@@ -24,14 +25,27 @@ transport requires an OS sandbox before running untrusted generated code.
 2. Controller sends `hello {slot, runtime_instance_id, generation, capabilities}`.
 3. Controller sends `restore {checkpoint_id, state_schema_version, last_event_seq}`.
 4. Seed sends `ready {generation, restored_seq, supported_schema_versions}`.
-5. Controller compares the persisted routing record and atomically commits a new
-   runtime instance and incremented epoch with its activation event.
+5. The runtime remains standby. Only a separate controller transaction can commit
+   its runtime instance and a new epoch; the runner then enables production turns
+   for that exact committed identity. Starting a process never grants authorization.
 
-Phase 0 supports state schema 1 and capabilities `memory_read` and `llm` only.
+The implementation supports state schema 1 and capabilities `memory_read` and `llm` only.
 `generation` is the bare hexadecimal SHA-256 of the retained seed executable.
-`checkpoint_id` is `event-log`: the seed has no private durable state and fetches
-context from the authoritative store for each turn. Exported snapshots and
-dual-slot restore are planned for Phase 1.
+Staging uses `checkpoint_id: synthetic-stage` and sequence zero, followed by a
+synthetic turn with controller-supplied mock tool results. No production data or
+broker calls are available in this mode. Before promotion the controller sends
+`restore` again, discarding simulation state; the seed returns a matching `ready`.
+
+Production checkpoints are immutable schema-1 envelopes saved transactionally in
+SQLite with an identity, generation, event high-watermark, and pending turn IDs.
+Their content digest is the checkpoint ID. All durable seed state lives in the
+controller's conversation/tool/task tables and append-only events, so the seed
+fetches the reconstructed authoritative context on each turn. Neither a heap nor
+an old conversation copy is used as restore state. Before promotion/rollback the
+store checks the checkpoint watermark against the latest committed sequence;
+late writes invalidate a stale restore. Rollback creates a fresh checkpoint
+including candidate-committed events and pending work. Portable checkpoint
+export and more complex agent state schemas remain future work.
 
 ## User turns
 
@@ -75,3 +89,6 @@ Bootstrap and health operations have five-second deadlines. A turn has one
 deadline of the configured provider timeout plus ten seconds, with a fixed
 number of broker exchanges. Controller writes always recheck durable fencing;
 old runtime instances cannot commit replies or tool results after replacement.
+During drain, new turns and new broker calls are denied; results of already
+reserved calls and their replies can still commit until the routing switch.
+After the switch all writes from the old slot/instance/epoch are rejected.

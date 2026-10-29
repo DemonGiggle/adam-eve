@@ -28,6 +28,8 @@ class Provider(BaseHTTPRequestHandler):
         CALLS.append(body)
         messages = body["messages"]
         text = messages[-1]["content"]
+        if text == "drain-pause":
+            time.sleep(0.7)
         if text == "pause":
             IN_FLIGHT.set()
             assert RELEASE.wait(10), "test did not release provider"
@@ -53,13 +55,13 @@ class Provider(BaseHTTPRequestHandler):
 
 
 class Controller:
-    def __init__(self, root, port):
+    def __init__(self, root, port, settings=None):
         self.errors = tempfile.TemporaryFile(mode="w+")
         self.process = subprocess.Popen([str(CHECKOUT / "scripts/ae")], cwd=CHECKOUT,
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=self.errors, text=True,
             env={**os.environ, "AE_DATA_ROOT": str(root), "AE_LLM_MODEL": "fixture",
                  "AE_LLM_URL": f"http://127.0.0.1:{port}/api/chat",
-                 "AE_TEST_SECRET": "must-stay-in-controller"})
+                 "AE_TEST_SECRET": "must-stay-in-controller", **(settings or {})})
 
     def send(self, command):
         self.process.stdin.write(json.dumps(command) + "\n")

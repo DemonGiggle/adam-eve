@@ -16,7 +16,7 @@ init([]) ->
     ok = send(Socket, <<"ready">>, #{<<"generation">> => Generation,
         <<"restored_seq">> => Seq, <<"supported_schema_versions">> => [1]}),
     ok = inet:setopts(Socket, [{active, once}]),
-    {ok, #{socket => Socket, turn => undefined}}.
+    {ok, #{socket => Socket, generation => Generation, turn => undefined}}.
 
 handle_call(_, _, State) -> {reply, {error, unsupported}, State}.
 handle_cast(_, State) -> {noreply, State}.
@@ -30,6 +30,11 @@ handle_info({tcp_error, _, _}, State) -> halt(1), {stop, normal, State};
 handle_info(_, State) -> {noreply, State}.
 terminate(_, #{socket := Socket}) -> gen_tcp:close(Socket).
 
+message(#{<<"type">> := <<"restore">>, <<"last_event_seq">> := Seq},
+        #{socket := Socket, generation := Generation} = State) ->
+    ok = send(Socket, <<"ready">>, #{<<"generation">> => Generation,
+        <<"restored_seq">> => Seq, <<"supported_schema_versions">> => [1]}),
+    maps:remove(phase, State#{turn := undefined});
 message(#{<<"type">> := <<"user_turn">>} = Turn, #{socket := Socket} = State) ->
     ok = tool(Socket, Turn, <<"memory_read">>, #{}),
     State#{turn := Turn, phase => memory};

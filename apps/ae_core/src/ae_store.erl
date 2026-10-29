@@ -6,7 +6,8 @@
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
 -export([register_artifact/1, checkpoint/1, get_checkpoint/1, quiesce/2,
          new_deployment/3, staged/3, approve/2, reject/2, deployment/1,
-         active_deployment/0, promote/4, rollback/5, complete/2, recover_handoff/0]).
+         active_deployment/0, promote/4, rollback/5, complete/2, recover_handoff/0,
+         activate_checkpoint/3, runtime_failed/2]).
 
 start_link(Root) -> gen_server:start_link({local, ?MODULE}, ?MODULE, Root, []).
 boot(Manifest) -> call({boot, Manifest}).
@@ -37,6 +38,8 @@ promote(Id, Expected, Descriptor, Checkpoint) -> call({promote, Id, Expected, De
 rollback(Id, Expected, Descriptor, Checkpoint, Reason) -> call({rollback, Id, Expected, Descriptor, Checkpoint, Reason}).
 complete(Id, Expected) -> call({complete, Id, Expected}).
 recover_handoff() -> call(recover_handoff).
+activate_checkpoint(Expected, Descriptor, Checkpoint) -> call({activate_checkpoint, Expected, Descriptor, Checkpoint}).
+runtime_failed(Expected, Reason) -> call({runtime_failed, Expected, Reason}).
 call(Request) -> gen_server:call(?MODULE, Request, 15000).
 
 init(Root) ->
@@ -196,6 +199,16 @@ dispatch({cancel_turn, Request}, Db) ->
         _ -> {error, invalid_turn}
     end;
 dispatch({register_artifact, Manifest}, Db) -> register_manifest(Db, Manifest);
+dispatch({runtime_failed, Expected, Reason}, Db) ->
+    require_baseline(Db, Expected),
+    save_route(Db, (route(Db))#{<<"admission">> => <<"closed">>}),
+    event(Db, <<"runtime_failed">>, #{<<"runtime">> => ae_policy:baseline(Expected), <<"reason">> => Reason}), ok;
+dispatch({activate_checkpoint, Expected, Descriptor, Checkpoint}, Db) ->
+    require_baseline(Db, Expected), require_checkpoint(Db, Checkpoint),
+    require(maps:get(<<"slot">>, Descriptor) =:= maps:get(<<"slot">>, Expected) andalso
+            maps:get(<<"artifact">>, Descriptor) =:= maps:get(<<"artifact">>, Expected), wrong_runtime),
+    New = new_route(Expected, Descriptor, Checkpoint), save_route(Db, New),
+    event(Db, <<"runtime_activated">>, New), {ok, New};
 dispatch({checkpoint, Expected}, Db) ->
     require_baseline(Db, Expected),
     Seq = last(Db),
