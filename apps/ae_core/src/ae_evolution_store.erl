@@ -108,6 +108,7 @@ attempt_result(Db, Job, Attempt, Outcome, PublicDiagnostics) ->
 
 create(Db, Expected, Origin, Objective, Limits) ->
     need(ae_policy:same_baseline(route(Db), Expected), stale_baseline),
+    need(not ae_sql:recovery_pending(Db), restore_verification_required),
     need(maps:get(<<"admission">>, route(Db), <<"open">>) =:= <<"open">>, quiescing),
     need(active(Db) =:= undefined, evolution_in_progress),
     need(ae_sql:rows(Db, "SELECT id FROM deployments WHERE status NOT IN ('completed','rejected','rolled_back')", []) =:= [],
@@ -188,6 +189,7 @@ authorized(Db, {Slot, Instance, Epoch}, Id) ->
     need(is_map(Route) andalso maps:get(<<"slot">>, Route) =:= Slot andalso
          maps:get(<<"runtime_instance_id">>, Route) =:= Instance andalso maps:get(<<"epoch">>, Route) =:= Epoch,
          stale_runtime),
+    need(not ae_sql:recovery_pending(Db), restore_verification_required),
     need(maps:get(<<"admission">>, Route, <<"open">>) =:= <<"open">>, quiescing),
     Job = must_get(Db, Id),
     case current(Db, Job) of

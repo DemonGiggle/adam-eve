@@ -7,7 +7,7 @@
 -export([register_artifact/1, checkpoint/1, get_checkpoint/1, quiesce/2,
          new_deployment/3, staged/3, approve/2, reject/2, deployment/1,
          active_deployment/0, promote/4, rollback/5, complete/2, recover_handoff/0,
-         activate_checkpoint/3, runtime_failed/2, evolution/1]).
+         activate_checkpoint/3, runtime_failed/2, evolution/1, recovery/0, verify_recovery/3]).
 
 start_link(Root) -> gen_server:start_link({local, ?MODULE}, ?MODULE, Root, []).
 boot(Manifest) -> call({boot, Manifest}).
@@ -41,6 +41,8 @@ recover_handoff() -> call(recover_handoff).
 activate_checkpoint(Expected, Descriptor, Checkpoint) -> call({activate_checkpoint, Expected, Descriptor, Checkpoint}).
 runtime_failed(Expected, Reason) -> call({runtime_failed, Expected, Reason}).
 evolution(Operation) -> call({evolution, Operation}).
+recovery() -> call(recovery).
+verify_recovery(Expected, BackupId, Origin) -> call({verify_recovery, Expected, BackupId, Origin}).
 call(Request) -> gen_server:call(?MODULE, Request, 15000).
 
 init(Root) ->
@@ -85,8 +87,8 @@ dispatch(routing, Db) -> route(Db);
 dispatch({activate, Expected, Instance}, Db) ->
     case route(Db) of
         Expected when is_map(Expected) ->
-            New = Expected#{<<"epoch">> := maps:get(<<"epoch">>, Expected) + 1,
-                            <<"runtime_instance_id">> := Instance, <<"admission">> => <<"open">>},
+            New = Expected#{<<"epoch">> := next_epoch(Db, Expected),
+                            <<"runtime_instance_id">> := Instance, <<"admission">> => admission(Db)},
             _ = sql(Db, "UPDATE routing SET data=? WHERE id=1", [jsx:encode(New)]),
             event(Db, <<"runtime_activated">>, New),
             ae_evolution_store:dispatch(Db, reconcile),
@@ -202,6 +204,23 @@ dispatch({cancel_turn, Request}, Db) ->
         _ -> {error, invalid_turn}
     end;
 dispatch({register_artifact, Manifest}, Db) -> register_manifest(Db, Manifest);
+dispatch(recovery, Db) -> ae_sql:recovery(Db);
+dispatch({verify_recovery, Expected, BackupId, Origin}, Db) ->
+    require_baseline(Db, Expected),
+    Recovery = ae_sql:recovery(Db), require(is_map(Recovery), no_restore_pending),
+    require(maps:get(<<"backup_id">>, Recovery) =:= BackupId, backup_mismatch),
+    require(is_binary(Origin) andalso byte_size(Origin) > 0 andalso byte_size(Origin) =< 256, invalid_origin),
+    CP = checkpoint_data(Db, maps:get(<<"checkpoint_id">>, Expected, null)),
+    require(is_map(CP), missing_checkpoint),
+    require(maps:get(<<"last_event_seq">>, CP) >= maps:get(<<"source_event_seq">>, Recovery), incomplete_replay),
+    require(maps:get(<<"epoch">>, Expected) > maps:get(<<"epoch_floor">>, Recovery), epoch_not_fenced),
+    case maps:get(<<"pending">>, Recovery) of
+        true ->
+            sql(Db, "UPDATE control SET data=? WHERE name='restore'", [jsx:encode(Recovery#{<<"pending">> := false})]),
+            save_route(Db, (route(Db))#{<<"admission">> => <<"open">>}),
+            event(Db, <<"restore_verified">>, #{<<"backup_id">> => BackupId, <<"origin_ref">> => Origin}), ok;
+        false -> ok
+    end;
 dispatch({runtime_failed, Expected, Reason}, Db) ->
     require_baseline(Db, Expected),
     save_route(Db, (route(Db))#{<<"admission">> => <<"closed">>}),
@@ -210,7 +229,7 @@ dispatch({activate_checkpoint, Expected, Descriptor, Checkpoint}, Db) ->
     require_baseline(Db, Expected), require_checkpoint(Db, Checkpoint),
     require(maps:get(<<"slot">>, Descriptor) =:= maps:get(<<"slot">>, Expected) andalso
             maps:get(<<"artifact">>, Descriptor) =:= maps:get(<<"artifact">>, Expected), wrong_runtime),
-    New = new_route(Expected, Descriptor, Checkpoint), save_route(Db, New),
+    New = new_route(Db, Expected, Descriptor, Checkpoint), save_route(Db, New),
     event(Db, <<"runtime_activated">>, New), ae_evolution_store:dispatch(Db, reconcile), {ok, New};
 dispatch({checkpoint, Expected}, Db) ->
     require_baseline(Db, Expected),
@@ -271,7 +290,7 @@ dispatch({promote, Id, Expected, Descriptor, Checkpoint}, Db) ->
     require(maps:get(<<"approval_binding">>, Job) =:= ae_policy:binding(Job), approval_mismatch),
     require(Descriptor =:= maps:get(<<"runtime">>, Job), runtime_changed),
     require_descriptor(Job, Descriptor, candidate), require_checkpoint(Db, Checkpoint),
-    New = new_route(Expected, Descriptor, Checkpoint),
+    New = new_route(Db, Expected, Descriptor, Checkpoint),
     Observing = Job#{<<"status">> := <<"observing">>, <<"promoted_route">> => New,
         <<"observe_until">> => now_ms() + maps:get(<<"observe_ms">>, maps:get(<<"limits">>, Job))},
     save_route(Db, New), save_job(Db, Observing),
@@ -280,7 +299,7 @@ dispatch({rollback, Id, Expected, Descriptor, Checkpoint, Reason}, Db) ->
     Job = require_job(Db, Id, [<<"observing">>]), require_baseline(Db, Expected),
     require(ae_policy:same_baseline(Expected, maps:get(<<"promoted_route">>, Job)), stale_routing),
     require_descriptor(Job, Descriptor, predecessor), require_checkpoint(Db, Checkpoint),
-    New = new_route(Expected, Descriptor, Checkpoint),
+    New = new_route(Db, Expected, Descriptor, Checkpoint),
     save_route(Db, New), save_job(Db, Job#{<<"status">> := <<"rolled_back">>, <<"reason">> => Reason}),
     event(Db, <<"routing_rolled_back">>, #{<<"deployment_id">> => Id, <<"routing">> => New,
                                           <<"reason">> => Reason}), {ok, New};
@@ -312,11 +331,14 @@ auth(Db, Auth) ->
     end.
 admission_auth(Db, Auth) ->
     case auth(Db, Auth) of
-        ok -> case maps:get(<<"admission">>, route(Db), <<"open">>) of
-            <<"open">> -> ok; _ -> {error, quiescing} end;
+        ok -> case {ae_sql:recovery_pending(Db), maps:get(<<"admission">>, route(Db), <<"open">>)} of
+            {true, _} -> {error, restore_verification_required};
+            {false, <<"open">>} -> ok; _ -> {error, quiescing} end;
         Error -> Error
     end.
-require_open(Db) -> require(maps:get(<<"admission">>, route(Db), <<"open">>) =:= <<"open">>, quiescing).
+require_open(Db) ->
+    require(not ae_sql:recovery_pending(Db), restore_verification_required),
+    require(maps:get(<<"admission">>, route(Db), <<"open">>) =:= <<"open">>, quiescing).
 require(true, _) -> ok;
 require(false, Reason) -> throw({error, Reason}).
 require_baseline(Db, Expected) -> require(ae_policy:same_baseline(route(Db), Expected), stale_routing).
@@ -358,18 +380,23 @@ require_descriptor(Job, Descriptor, Which) ->
             {maps:get(<<"slot">>, Base), maps:get(<<"artifact">>, Base)} end,
     require(maps:get(<<"slot">>, Descriptor) =:= Slot andalso
             maps:get(<<"artifact">>, Descriptor) =:= Manifest, wrong_runtime).
-new_route(Expected, Descriptor, Checkpoint) ->
-    Descriptor#{<<"epoch">> => maps:get(<<"epoch">>, Expected) + 1,
-                <<"checkpoint_id">> => Checkpoint, <<"admission">> => <<"open">>}.
+new_route(Db, Expected, Descriptor, Checkpoint) ->
+    Descriptor#{<<"epoch">> => next_epoch(Db, Expected),
+                <<"checkpoint_id">> => Checkpoint, <<"admission">> => admission(Db)}.
+next_epoch(Db, Expected) ->
+    Floor = case ae_sql:recovery(Db) of undefined -> 0; Record -> maps:get(<<"epoch_floor">>, Record) end,
+    max(maps:get(<<"epoch">>, Expected), Floor) + 1.
+admission(Db) -> case ae_sql:recovery_pending(Db) of true -> <<"closed">>; false -> <<"open">> end.
 reject_job(Db, Id, Reason) ->
     Job = require_job(Db, Id, [<<"staging">>, <<"awaiting_approval">>, <<"approved">>, <<"quiescing">>]),
     case ae_policy:same_baseline(route(Db), maps:get(<<"baseline">>, Job)) of
-        true -> save_route(Db, (route(Db))#{<<"admission">> => <<"open">>});
+        true -> save_route(Db, (route(Db))#{<<"admission">> => admission(Db)});
         false -> ok end,
     save_job(Db, Job#{<<"status">> := <<"rejected">>, <<"reason">> => Reason}),
     event(Db, <<"deployment_rejected">>, #{<<"deployment_id">> => Id, <<"reason">> => Reason}), ok.
 require_auth(Db, Auth) ->
-    case auth(Db, Auth) of ok -> ok; Error -> throw(Error) end.
+    case auth(Db, Auth) of ok -> ok; Error -> throw(Error) end,
+    require(not ae_sql:recovery_pending(Db), restore_verification_required).
 route(Db) ->
     case rows(Db, "SELECT data FROM routing WHERE id=1", []) of
         [] -> undefined;
