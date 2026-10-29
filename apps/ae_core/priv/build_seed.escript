@@ -31,8 +31,10 @@ main([Source, Dependency, Revision, Tree, Parent, DependencyHash, RecipeHash, Ou
     All = lists:keysort(1, [entry("ae_seed/provenance/build.term", iolist_to_binary(io_lib:format("~tp.~n", [Metadata]))) | Files]),
     {ok, Executable} = escript:create(binary, [shebang, {comment, "adam-eve fixed seed recipe v1"},
         {emu_args, "+S 2:2 +A 1"}, {archive, All, [{compress, []}]}]),
-    ok = filelib:ensure_dir(Output),
-    ok = file:write_file(Output, Executable);
+    case Output of
+        "-" -> io:put_chars(["AE_SEED_V1\n", base64:encode(Executable), "\n"]);
+        _ -> ok = filelib:ensure_dir(Output), ok = file:write_file(Output, Executable)
+    end;
 main(_) -> halt(64).
 
 validate_config() ->
