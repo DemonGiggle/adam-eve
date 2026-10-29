@@ -31,13 +31,74 @@ clears the compiler's inherited environment; it has no generated-code fallback.
 The manual publisher remains inappropriate for untrusted or AI-authored patches:
 compiler code still executes on the operator host in this development path.
 
-The future `ae_builder` must export/check the pinned tree, apply the accepted
-patch to a disposable workspace, and run this recipe through `ae_sandbox.run`
-with source, dependency, and recipe inputs mounted read-only. Only private
-bounded output storage may be writable. No controller data, credentials, source
-repository, or private evaluator cases may be mounted in that compiler process.
-It must enforce the durable job budget, independently evaluate the exact output,
-and publish verified complete contents before registering availability.
+## Isolated candidate builder
+
+`ae_build_sup:start_job(JobId, Config, NotifyPid)` starts a temporary supervised
+`ae_builder` for an accepted proposal. It reserves a durable execution lease
+before starting the fixed Python launcher. CPU reservations accumulate across
+builds, evaluations and repairs without refunds after failure or restart. An
+unresolved reservation cannot silently launch a duplicate execution. Each lease
+also has an absolute expiry within the job deadline. The builder can advance a
+job from `building` to `testing`; it cannot approve or deploy it.
+
+`ae_candidate.py` uses a private Git index against the protected active source
+ref. It checks the baseline, patch hash, changed-path set, regular file modes,
+source size/count, and cumulative source parent. Git hooks, filters, external
+object stores, replacements, and arbitrary configuration are excluded. It
+retains a deterministic commit under `refs/attempts/<job>/<attempt>` and exports
+raw blobs, so checkout/archive attributes cannot alter compiler input bytes.
+Only public build inputs are exported; controller code, Git metadata, private
+contract tests and credentials are not mounted in the compiler. Unexpected
+private files and symlinks cause rejection rather than being copied into it.
+
+Compilation uses the verified cgroup/namespace/seccomp backend with source and
+the verified dependency mounted read-only. The exact controller recipe is
+hashed and sealed before mounting. The compiler emits bounded base64 release
+bytes through stdout; it receives no writable host output mount. The controller
+treats those contents as opaque untrusted bytes, checks their size/hash and
+durably publishes the complete release and protected generation ref. It never
+decodes a generated BEAM/archive or loads candidate modules into its own VM.
+
+The manifest records the source tree/parent, objective, job/attempt, patch hash,
+toolchain compatibility and pinned recipe/dependency hashes. Its `authoring` is
+`llm` and `evaluation` is null. Publication alone does not make it deployable:
+ordinary deployment rejects generated artifacts with
+`independent_evaluation_required`. An independent evaluator and the overall
+evolution lifecycle still need to be integrated before enabling self-evolution.
+Missing isolation never falls back to the manual host compiler.
+
+Configure the internal builder through `AE_BUILD_CONFIG_JSON`. Every field is
+required; invalid or missing configuration disables the builder. For example,
+the following are **local test budgets**, not production defaults:
+
+```json
+{
+  "cgroup_root": "/sys/fs/cgroup/owned-jobs",
+  "jsx_package": "/private/cache/jsx-3.1.0.tar",
+  "source_bytes": 2097152,
+  "source_files": 128,
+  "artifact_bytes": 8388608,
+  "sandbox_limits": {
+    "memory_bytes": 536870912,
+    "pids": 32,
+    "cpu_percent": 100,
+    "cpu_seconds": 5,
+    "address_space_bytes": 1073741824,
+    "file_bytes": 33554432,
+    "open_files": 128,
+    "output_bytes": 16777216,
+    "wall_ms": 20000
+  }
+}
+```
+
+Effective CPU/memory/process/time bounds cannot exceed the durable job/lease
+limits. The cgroup watchdog also enforces fractional-second aggregate CPU
+budgets; polling and kernel scheduling impose watchdog granularity. Compiler
+failures return bounded public diagnostics, without raw Git/host errors. Scope
+violations terminate the job. Failed compilation can request a complete repair
+diff within the original remaining budget. The control plane and conversation
+service remain usable after a failed build.
 
 Reproducibility tests rebuild the same committed input under different directory
 paths and file timestamps and compare the complete executable bytes. They also
@@ -47,4 +108,24 @@ exercise these releases through real runtime restart, handoff, and rollback.
 
 These checks establish reproducibility for the tested pinned inputs/toolchain.
 They do not establish cross-toolchain equivalence, a self-contained ERTS release,
-an isolated generated-code builder, or the independent Phase 2 quality gates.
+or the independent Phase 2 quality gates.
+
+Candidate tests cover pinned exports/ancestry, deterministic attempt commits,
+zero-context patch checks, symlink/scope denial, mandatory execution leases,
+disk reserve and fail-closed isolation. Set `AE_TEST_CGROUP_ROOT` to exercise
+the successful restricted compilation and retained output. The authoring
+integration includes a supervised-build failure; with a delegated test root it
+also includes a successful author → build → testing transition and verifies
+that the unevaluated output cannot be deployed.
+
+The native development host lacks cgroup delegation. Separate checks in an
+unprivileged user session inside a disposable QEMU/Linux 6.12 VM verified all
+eight kernel boundary tests, a successful restricted build, and the supervised
+authoring-to-build transition with both runtime and compiler restricted. Software
+emulation used explicit test allowances of 180000
+ms build wall time and 90000 ms CPU. These are selected by
+`AE_TEST_BUILD_WALL_MS`/`AE_TEST_BUILD_CPU_MS`, not substituted for production
+budgets. A separate restricted-runtime test killed the launcher, verified fresh
+epochs and retained completed/unknown effects, then restarted from a checkpoint.
+Full restricted Adam/Eve handoff and the independent evaluator remain separate
+acceptance work.

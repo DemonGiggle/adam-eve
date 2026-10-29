@@ -245,6 +245,8 @@ dispatch({checkpoint, Expected}, Db) ->
 dispatch({get_checkpoint, Id}, Db) -> checkpoint_data(Db, Id);
 dispatch({new_deployment, Expected, Candidate, Limits}, Db) ->
     require_baseline(Db, Expected), require_open(Db),
+    require(maps:get(<<"authoring">>, Candidate, <<"trusted_manual">>) =:= <<"trusted_manual">>,
+            independent_evaluation_required),
     require(active_job(Db) =:= undefined, deployment_in_progress),
     require(ae_evolution_store:dispatch(Db, active) =:= undefined, evolution_in_progress),
     require(maps:get(<<"parent">>, Candidate, null) =:=

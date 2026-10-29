@@ -198,9 +198,13 @@ def namespace_command(command, limits, policy, readonly=(), data_files=(), writa
     return args + list(command)
 
 
-def run(cgroup_root, limits, command, *, readonly=(), data_files=(), writable_tmp=(), watch_parent=False):
+def run(cgroup_root, limits, command, *, readonly=(), data_files=(), writable_tmp=(), watch_parent=False, cpu_budget_ms=None):
     """Run an opaque program only after the kernel resource boundary is ready."""
     validate_limits(limits)
+    if cpu_budget_ms is None:
+        cpu_budget_ms = limits["cpu_seconds"] * 1000
+    if type(cpu_budget_ms) is not int or not 0 < cpu_budget_ms <= limits["cpu_seconds"] * 1000:
+        raise Unavailable("invalid_cpu_budget")
     with Cgroup(cgroup_root, limits) as group, seccomp_policy() as policy:
         args = namespace_command(command, limits, policy, readonly, data_files, writable_tmp)
         descriptors = (policy,) + tuple(fd for fd, _ in data_files)
@@ -218,7 +222,7 @@ def run(cgroup_root, limits, command, *, readonly=(), data_files=(), writable_tm
                     while child.poll() is None or selector.get_map().get(child.stdout.fileno()):
                         if time.monotonic() >= deadline:
                             reason = "sandbox_timeout"
-                        if group.cpu_used() > limits["cpu_seconds"] * 1000000:
+                        if group.cpu_used() > cpu_budget_ms * 1000:
                             reason = "sandbox_cpu_budget"
                         if reason:
                             group.kill()

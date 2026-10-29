@@ -10,6 +10,8 @@ promotion_recovery_preserves_acknowledged_work_test() ->
         {ok, Base} = ae_store:activate(Initial, <<"adam-1">>),
         G2 = #{<<"digest">> => <<"g2">>, <<"parent">> => <<"g1">>},
         Limits = #{<<"approval_ttl_ms">> => 60000, <<"observe_ms">> => 60000},
+        ?assertEqual({error, independent_evaluation_required},
+            ae_store:new_deployment(Base, G2#{<<"authoring">> => <<"llm">>}, Limits)),
         {ok, Job} = ae_store:new_deployment(Base, G2, Limits),
         Id = maps:get(<<"id">>, Job),
         ?assertEqual({error, deployment_in_progress}, ae_store:new_deployment(Base, G2, Limits)),

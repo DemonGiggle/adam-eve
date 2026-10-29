@@ -77,6 +77,36 @@ source_budget_and_time_test() ->
         ?assertEqual(undefined, e(active))
     end).
 
+execution_reservations_survive_failure_and_restart_test() ->
+    with_store(fun(Base, Auth) ->
+        {ok, Job} = e({create, Base, <<"execution-test">>, <<"improve">>, limits()}),
+        Id = maps:get(<<"id">>, Job),
+        {ok, _} = e({proposal, Auth, Id, proposal(<<"p1">>, patch())}),
+        {ok, Lease1} = e({reserve_execution, Id, 1, <<"build">>, 2000, 1000}),
+        ?assertEqual({error, execution_outcome_unknown}, e({reserve_execution, Id, 1, <<"build">>, 2000, 1000})),
+        gen_server:stop(ae_store), {ok, _} = ae_store:start_link(get(test_root)),
+        ?assertEqual(2000, maps:get(<<"reserved_cpu_ms">>, e({get, Id}))),
+        ?assertEqual({error, execution_outcome_unknown}, e({reserve_execution, Id, 1, <<"build">>, 2000, 1000})),
+        ?assertEqual({error, invalid_execution_lease},
+            e({execution_failed, Id, 1, <<"build">>, <<"wrong">>, <<"compile_failed">>, <<"public diagnostic">>})),
+        {ok, _} = e({execution_failed, Id, 1, <<"build">>, maps:get(<<"id">>, Lease1),
+            <<"compile_failed">>, <<"public diagnostic">>}),
+        {ok, Accepted} = e({proposal, Auth, Id, proposal(<<"p2">>, patch())}),
+        {ok, Lease2} = e({reserve_execution, Id, 2, <<"build">>, 2000, 1000}),
+        Manifest = #{<<"authoring">> => <<"llm">>, <<"digest">> => binary:copy(<<"a">>, 64),
+            <<"source_revision">> => binary:copy(<<"b">>, 40), <<"source_tree">> => binary:copy(<<"c">>, 40),
+            <<"parent">> => <<"g1">>, <<"producing_job">> => Id, <<"producing_attempt">> => 2,
+            <<"patch_hash">> => maps:get(<<"patch_hash">>, Accepted), <<"capabilities">> => [],
+            <<"state_schema_versions">> => [1], <<"evaluation">> => null},
+        ?assertEqual({error, invalid_build_manifest}, e({finish_build, Id, 2, maps:get(<<"id">>, Lease2),
+            Manifest#{<<"producing_job">> := <<"wrong-job">>}})),
+        {ok, Built} = e({finish_build, Id, 2, maps:get(<<"id">>, Lease2), Manifest}),
+        ?assertEqual(<<"testing">>, maps:get(<<"status">>, Built)),
+        ?assertEqual(4000, maps:get(<<"reserved_cpu_ms">>, Built)),
+        ?assertEqual({error, budget_exhausted}, e({reserve_execution, Id, 2, <<"evaluate">>, 2000, 1000})),
+        ?assertEqual(<<"rejected">>, maps:get(<<"status">>, e({get, Id})))
+    end).
+
 patch_scope_test() ->
     ?assertMatch({ok, [_]}, ae_patch:validate(patch(), 4096)),
     [begin

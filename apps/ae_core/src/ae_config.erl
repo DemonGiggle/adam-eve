@@ -19,7 +19,13 @@ load() ->
       max_tokens => integer_env("AE_LLM_MAX_TOKENS", 512, 1, 8192),
       context_turns => integer_env("AE_CONTEXT_TURNS", 8, 1, 8),
       max_llm_attempts => integer_env("AE_MAX_LLM_ATTEMPTS", 3, 1, 10),
-      handoff_limits => handoff_limits()}).
+      handoff_limits => handoff_limits(), candidate_builder => candidate_builder()}).
+
+candidate_builder() ->
+    try
+        Config = jsx:decode(list_to_binary(required("AE_BUILD_CONFIG_JSON")), [return_maps, strict]),
+        {ok, Config} = ae_builder:validate_config(Config), Config
+    catch _:_ -> undefined end.
 
 isolation() ->
     case env("AE_RUNTIME_ISOLATION", "development") of

@@ -12,6 +12,25 @@ main([Scenario, LimitsPath]) ->
     Id = maps:get(<<"id">>, Job),
     Result = case Scenario of
         "cache" -> check_cache(Id);
+        "builder-unavailable" ->
+            {ok, _} = ae_router:author(Id),
+            {ok, Pid} = ae_build_sup:start_job(Id, Config, self()),
+            Ref = monitor(process, Pid),
+            BuildResult = receive {ae_build_result, Id, R} -> R after 15000 -> error(builder_did_not_finish) end,
+            receive {'DOWN', Ref, process, Pid, normal} -> ok after 5000 -> error(builder_did_not_stop) end,
+            BuildResult;
+        "builder-success" ->
+            {ok, _} = ae_router:author(Id),
+            {ok, Pid} = ae_build_sup:start_job(Id, Config, self()), Ref = monitor(process, Pid),
+            Wait = maps:get(<<"total_ms">>, Limits),
+            Built = receive {ae_build_result, Id, {ok, J}} -> J;
+                            {ae_build_result, Id, Error} -> error(Error)
+                    after Wait -> error(builder_did_not_finish) end,
+            receive {'DOWN', Ref, process, Pid, normal} -> ok after 5000 -> error(builder_did_not_stop) end,
+            Manifest = maps:get(<<"built_artifact">>, Built),
+            {error, independent_evaluation_required} = ae_store:new_deployment(ae_store:routing(), Manifest,
+                #{<<"approval_ttl_ms">> => 60000, <<"observe_ms">> => 60000}),
+            {ok, Manifest};
         "repair" ->
             {ok, #{<<"attempt">> := 1}} = ae_router:author(Id),
             {ok, _} = ae_store:evolution({attempt_result, Id, 1, <<"build_failed">>, <<"public compiler diagnostic">>}),

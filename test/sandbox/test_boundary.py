@@ -166,6 +166,41 @@ print(json.dumps({{"boundary": "ok"}}))
 
 @unittest.skipUnless(os.getenv("AE_TEST_CGROUP_ROOT"), "requires an explicitly delegated cgroup v2 test root")
 class DelegatedCgroupTests(unittest.TestCase):
+    def test_aggregate_cpu_and_process_budgets(self):
+        root = Path(os.environ["AE_TEST_CGROUP_ROOT"])
+        _, _, reason = sandbox.run(root, LIMITS, ["/usr/bin/python3", "-c", "while True: pass"],
+                                   readonly=python_mounts(), cpu_budget_ms=50)
+        self.assertEqual(reason, "sandbox_cpu_budget")
+        # Make the per-process rlimit looser than the aggregate cgroup limit to
+        # prove the actual kernel PID controller stops forks, not just RLIMIT_NPROC.
+        group_limits = {**LIMITS, "pids": 16}
+        script = '''
+import errno, os, signal, time
+children=[]
+try:
+    for _ in range(64):
+        try: pid=os.fork()
+        except OSError as error:
+            assert error.errno == errno.EAGAIN
+            break
+        if pid == 0:
+            time.sleep(5)
+            os._exit(0)
+        children.append(pid)
+    assert 0 < len(children) < 16
+finally:
+    for pid in children: os.kill(pid, signal.SIGKILL)
+    for pid in children: os.waitpid(pid, 0)
+'''
+        with sandbox.Cgroup(root, group_limits) as group, sandbox.seccomp_policy() as policy:
+            arguments = sandbox.namespace_command(["/usr/bin/python3", "-c", script],
+                {**LIMITS, "pids": 64}, policy, readonly=python_mounts())
+            result = subprocess.run(arguments, capture_output=True, timeout=15,
+                pass_fds=(policy,), preexec_fn=group.enter_child)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            events = dict(line.split() for line in (group.path / "pids.events").read_text().splitlines())
+            self.assertGreater(int(events["max"]), 0)
+
     def test_real_membership_limits_and_cleanup(self):
         root = Path(os.environ["AE_TEST_CGROUP_ROOT"])
         before = set(root.glob("ae-*"))

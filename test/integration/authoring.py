@@ -85,18 +85,42 @@ def main():
             "build_ms": 5000, "evaluation_ms": 5000, "cpu_ms": 5000, "memory_bytes": 536870912,
             "processes": 32, "disk_reserve_bytes": 1048576}
         try:
-            for scenario in ("success", "protected", "budget", "invalid", "missing-usage", "over-budget", "cache", "repair"):
+            scenarios = ["success", "protected", "budget", "invalid", "missing-usage", "over-budget", "cache", "repair", "builder-unavailable"]
+            if os.environ.get("AE_TEST_CGROUP_ROOT"):
+                scenarios.append("builder-success")
+            if os.environ.get("AE_TEST_AUTHORING_SCENARIOS"):
+                scenarios = os.environ["AE_TEST_AUTHORING_SCENARIOS"].split(",")
+                assert all(s in {"success", "protected", "budget", "invalid", "missing-usage", "over-budget", "cache", "repair", "builder-unavailable", "builder-success"} for s in scenarios)
+            for scenario in scenarios:
                 Provider.scenario = scenario
                 Provider.requests = []
                 policy = {**limits, "max_llm_calls": 1} if scenario == "budget" else limits
                 if scenario == "repair":
                     policy = {**limits, "max_llm_calls": 8, "max_tokens": 262144}
+                if scenario == "builder-success":
+                    wall_ms = int(os.environ.get("AE_TEST_BUILD_WALL_MS", "20000"))
+                    cpu_ms = int(os.environ.get("AE_TEST_BUILD_CPU_MS", "10000"))
+                    policy = {**limits, "total_ms": wall_ms * 3, "build_ms": wall_ms, "cpu_ms": cpu_ms * 3}
                 limit_file = root / "limits.json"
                 limit_file.write_text(json.dumps(policy))
+                extra_env = {}
+                if scenario in ("builder-unavailable", "builder-success"):
+                    if scenario == "builder-unavailable":
+                        fake = root / "fake-cgroup"
+                        fake.mkdir()
+                        wall_ms, cpu_ms = 5000, 1000
+                    else:
+                        fake = Path(os.environ["AE_TEST_CGROUP_ROOT"])
+                    package = os.environ.get("AE_JSX_PACKAGE", str(Path.home() / ".cache/rebar3/hex/hexpm/packages/jsx-3.1.0.tar"))
+                    extra_env["AE_BUILD_CONFIG_JSON"] = json.dumps({"cgroup_root": str(fake), "jsx_package": package,
+                        "source_bytes": 2097152, "source_files": 128, "artifact_bytes": 8388608,
+                        "sandbox_limits": {"memory_bytes": 536870912, "pids": 32, "cpu_percent": 100,
+                            "cpu_seconds": (cpu_ms + 999) // 1000, "address_space_bytes": 1073741824, "file_bytes": 33554432,
+                            "open_files": 128, "output_bytes": 16777216, "wall_ms": wall_ms}})
                 result = subprocess.run(["escript", str(CHECKOUT / "test/integration/authoring.escript"), scenario, str(limit_file)],
                     cwd=CHECKOUT, env={**os.environ, "AE_DATA_ROOT": str(root), "AE_LLM_MODEL": "fixture",
-                        "AE_LLM_URL": f"http://127.0.0.1:{server.server_port}/api/chat"},
-                    text=True, capture_output=True, timeout=30)
+                        "AE_LLM_URL": f"http://127.0.0.1:{server.server_port}/api/chat", **extra_env},
+                    text=True, capture_output=True, timeout=policy["total_ms"] / 1000 + 30)
                 assert result.returncode == 0, result.stdout + result.stderr
                 output = json.loads(result.stdout.splitlines()[0])
                 assert output["conversation"]["ok"] == "conversation still works", output
@@ -113,6 +137,18 @@ def main():
                 elif scenario == "cache":
                     assert output["result"]["ok"] == {"cached": True, "unknown_not_reissued": True}
                     assert len(Provider.requests) == 1 and job["llm_calls"] == 2
+                elif scenario == "builder-unavailable":
+                    assert output["result"]["error"] == "cgroup_v2_required", output
+                    assert job["reserved_cpu_ms"] == 1000 and job["status"] == "proposing"
+                    assert job["attempts"] == 1
+                    assert next(iter(job["executions"].values()))["status"] == "failed"
+                elif scenario == "builder-success":
+                    manifest = output["result"]["ok"]
+                    assert manifest["authoring"] == "llm" and manifest["evaluation"] is None
+                    assert job["status"] == "testing" and job["attempts"] == 1 and job["reserved_cpu_ms"] == cpu_ms
+                    assert job["built_artifact"] == manifest
+                    assert next(iter(job["executions"].values()))["status"] == "completed"
+                    assert (root / "artifacts" / manifest["digest"] / "seed").is_file()
                 else:
                     expected = {"protected": "protected_source", "budget": "budget_exhausted",
                         "invalid": "invalid_authoring_response", "missing-usage": "provider_usage_missing",
@@ -120,7 +156,7 @@ def main():
                     assert output["result"]["error"] == expected, output
                     assert job["attempts"] == 0
                 assert not list((root / "workspaces").iterdir())
-            print("Authoring integration passed: job-scoped paginated source, budgeted LLM patch, dedupe, denial and usable conversation; no patch execution.")
+            print("Authoring integration passed: scoped source, budgeted patches/repairs, dedupe, denial and usable conversation; generated releases remain unapproved.")
         finally:
             server.shutdown()
             server.server_close()

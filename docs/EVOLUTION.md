@@ -6,10 +6,12 @@ controller-authorized job with the active runtime. The source/status and budgete
 LLM broker capabilities are available only during that exchange, bound to its
 job, generation, authenticated runtime and epoch. There is no CLI evolution
 command yet, and `evolution_enabled` remains false. The orchestrating
-`ae_evolution` state machine, `seed_evolver`, broker integration, isolated builder,
-independent scorecard, and publication/retention recovery remain
+`ae_evolution` state machine, independent evaluator/scorecard, and
+publication/retention recovery remain
 required before the Phase 2 exit criterion can be claimed.
 The fixed reproducible seed recipe is available separately; see [BUILD.md](BUILD.md).
+That guide also describes the supervised isolated builder, durable execution
+leases, and the gate that keeps its unevaluated output out of production.
 Operator backup/restore and its local recovery drill are in [RECOVERY.md](RECOVERY.md).
 
 ## Authoring path

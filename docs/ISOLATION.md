@@ -100,10 +100,12 @@ AE_TEST_CGROUP_ROOT="$AE_CGROUP_ROOT" python3 -m unittest discover -s test/sandb
 ```
 
 The current development host permits namespaces but does not delegate CPU,
-memory, or PID controllers. Five component tests pass here; two tests for actual
-cgroup membership, OOM limits, watchdog/output limits, and cleanup are skipped
-without `AE_TEST_CGROUP_ROOT`. Full cgroup execution and the selected backend's
-end-to-end runtime recovery remain unverified on this host. Generated-code
-execution and automatic evolution remain disabled. This is a runtime boundary
-foundation; it is not an isolated builder, independent quality gate, retention
-collector, or backup/restore implementation.
+memory, or PID controllers. Five component tests pass here; three aggregate
+cgroup tests and a restricted-runtime recovery test require `AE_TEST_CGROUP_ROOT`.
+All nine sandbox tests passed as an unprivileged user inside a separate disposable
+QEMU/Linux 6.12 VM with real delegation. Restricted
+candidate compilation, the supervised build transition and restricted runtime
+crash/checkpoint recovery passed there as well; see [BUILD.md](BUILD.md). Full
+restricted Adam/Eve handoff remains separate verification work. Automatic evolution stays disabled
+until orchestration and independent quality gates are implemented. Backup/restore
+is described separately in [RECOVERY.md](RECOVERY.md).

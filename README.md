@@ -13,8 +13,9 @@ Phase 2 foundations now include a durable bounded authoring ledger, scoped
 paginated source access, a protected patch policy, and an optional restricted
 runtime backend. The seed can read scoped source and submit budgeted structured
 LLM patches through an internal controller-authorized authoring exchange. The
-orchestrator, isolated builder and evaluator are still required before enabling
-evolution. Consistent online backups and fenced restoration are
+isolated builder now records execution budgets and retains generated releases
+for testing. The orchestrator and independent evaluator are still required
+before enabling evolution. Consistent online backups and fenced restoration are
 available through the operator commands in [docs/RECOVERY.md](docs/RECOVERY.md).
 See [docs/EVOLUTION.md](docs/EVOLUTION.md) and
 [docs/ISOLATION.md](docs/ISOLATION.md) for implemented behavior, required host
@@ -137,8 +138,8 @@ fixing the cause. Runtime failures are audited.
 | `AE_LLM_MODEL` | required | Installed Ollama model name |
 | `AE_LLM_URL` | `http://127.0.0.1:11434/api/chat` | Loopback HTTP endpoint only |
 | `AE_LLM_TIMEOUT_MS` | `30000` | Provider timeout, 100–300000 ms |
-| `AE_LLM_MAX_TOKENS` | `512` | Requested output limit, 1–8192 |
 | `AE_RUNTIME_START_TIMEOUT_MS` | `5000` | Runtime connect/authentication/restore deadline, 100–30000 ms |
+| `AE_LLM_MAX_TOKENS` | `512` | Requested output limit, 1–8192 |
 | `AE_CONTEXT_TURNS` | `8` | Recent turns supplied per session, 1–8 |
 | `AE_MAX_LLM_ATTEMPTS` | `3` | Operator-authorized calls per turn, 1–10 |
 | `AE_APPROVAL_TTL_MS` | required for handoff | Staging/approval lifetime |

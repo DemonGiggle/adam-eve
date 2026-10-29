@@ -20,6 +20,51 @@ dispatch(Db, active) -> active(Db);
 dispatch(Db, {attempt, Id, Number}) ->
     case ae_sql:rows(Db, "SELECT data FROM evolution_proposals WHERE job_id=? AND attempt=?", [Id, Number]) of
         [] -> undefined; [{Data}] -> jsx:decode(Data, [return_maps]) end;
+dispatch(Db, {reserve_execution, Id, Attempt, Kind, CpuMs, WallMs}) ->
+    Job = must_get(Db, Id), need(current(Db, Job) =:= ok, stale_or_expired_job),
+    need(lists:member(Kind, [<<"build">>, <<"evaluate">>]), invalid_execution_kind),
+    need(maps:get(<<"attempts">>, Job) =:= Attempt andalso Attempt > 0, invalid_attempt),
+    Expected = case Kind of <<"build">> -> <<"building">>; <<"evaluate">> -> <<"testing">> end,
+    need(maps:get(<<"status">>, Job) =:= Expected, invalid_job_state),
+    reserve_execution(Db, Job, Attempt, Kind, CpuMs, WallMs);
+dispatch(Db, {finish_build, Id, Attempt, LeaseId, Manifest}) ->
+    Job = must_get(Db, Id), need(current(Db, Job) =:= ok, stale_or_expired_job),
+    {Key, Lease} = execution(Job, Attempt, <<"build">>, LeaseId),
+    need(maps:get(<<"status">>, Job) =:= <<"building">>, invalid_job_state),
+    need(maps:get(<<"status">>, Lease) =:= <<"reserved">>, execution_finished),
+    need(now_ms() =< maps:get(<<"expires_at_ms">>, Lease), execution_expired),
+    Base = maps:get(<<"artifact">>, maps:get(<<"baseline">>, Job)),
+    Proposal = dispatch(Db, {attempt, Id, Attempt}),
+    need(is_map(Manifest) andalso byte_size(jsx:encode(Manifest)) =< 65536, invalid_build_manifest),
+    need(maps:get(<<"authoring">>, Manifest, null) =:= <<"llm">> andalso
+        maps:get(<<"parent">>, Manifest, null) =:= maps:get(<<"digest">>, Base) andalso
+        maps:get(<<"producing_job">>, Manifest, null) =:= Id andalso
+        maps:get(<<"producing_attempt">>, Manifest, null) =:= Attempt andalso
+        maps:get(<<"patch_hash">>, Manifest, null) =:= maps:get(<<"patch_hash">>, Proposal) andalso
+        maps:get(<<"capabilities">>, Manifest, null) =:= maps:get(<<"capabilities">>, Base, []) andalso
+        maps:get(<<"state_schema_versions">>, Manifest, null) =:= [1] andalso
+        maps:get(<<"evaluation">>, Manifest, missing) =:= null andalso
+        hex(maps:get(<<"digest">>, Manifest, null)) andalso
+        hex40(maps:get(<<"source_revision">>, Manifest, null)) andalso
+        hex40(maps:get(<<"source_tree">>, Manifest, null)), invalid_build_manifest),
+    Executions = maps:get(<<"executions">>, Job),
+    New = Job#{<<"status">> := <<"testing">>, <<"built_artifact">> => Manifest,
+        <<"executions">> := Executions#{Key := Lease#{<<"status">> := <<"completed">>,
+            <<"artifact_digest">> => maps:get(<<"digest">>, Manifest)}}},
+    save(Db, New), event(Db, <<"candidate_built">>, #{<<"job_id">> => Id, <<"attempt">> => Attempt,
+        <<"artifact_digest">> => maps:get(<<"digest">>, Manifest), <<"execution_id">> => LeaseId}), {ok, New};
+dispatch(Db, {execution_failed, Id, Attempt, Kind, LeaseId, Reason, PublicDiagnostics}) ->
+    Job = must_get(Db, Id), need(current(Db, Job) =:= ok, stale_or_expired_job),
+    {Key, Lease} = execution(Job, Attempt, Kind, LeaseId),
+    need(maps:get(<<"status">>, Lease) =:= <<"reserved">>, execution_finished),
+    need(text(Reason, 256), invalid_execution_reason),
+    Protected = lists:member(Reason, [<<"protected_patch">>, <<"unsafe_source_tree">>, <<"patch_scope_mismatch">>,
+        <<"protected_source_tree">>, <<"attempt_source_conflict">>]),
+    Outcome = case {Protected, Kind} of
+        {true, _} -> <<"rejected">>; {false, <<"build">>} -> <<"build_failed">>; {false, <<"evaluate">>} -> <<"tests_failed">> end,
+    Executions = maps:get(<<"executions">>, Job),
+    Updated = Job#{<<"executions">> := Executions#{Key := Lease#{<<"status">> := <<"failed">>, <<"reason">> => Reason}}},
+    save(Db, Updated), attempt_result(Db, Updated, Attempt, Outcome, PublicDiagnostics);
 dispatch(Db, {authorize, Auth, Id}) -> authorized(Db, Auth, Id);
 dispatch(Db, {source_violation, Auth, Id}) ->
     case authorized(Db, Auth, Id) of
@@ -91,7 +136,7 @@ dispatch(_, _) -> {error, invalid_evolution_operation}.
 
 attempt_result(Db, Job, Attempt, Outcome, PublicDiagnostics) ->
     Id = maps:get(<<"id">>, Job),
-    need(maps:get(<<"status">>, Job) =:= <<"building">> andalso maps:get(<<"attempts">>, Job) =:= Attempt,
+    need(lists:member(maps:get(<<"status">>, Job), [<<"building">>, <<"testing">>]) andalso maps:get(<<"attempts">>, Job) =:= Attempt,
          invalid_attempt),
     need(lists:member(Outcome, [<<"build_failed">>, <<"tests_failed">>, <<"rejected">>]), invalid_outcome),
     %% Only public compiler/test summaries belong here. Private evaluator output
@@ -215,6 +260,38 @@ need_limits(Limits) -> case ae_evolution_limits:validate(Limits) of {ok, _} = Ok
 text(V, Max) -> is_binary(V) andalso byte_size(V) > 0 andalso byte_size(V) =< Max.
 text_or_empty(V, Max) -> is_binary(V) andalso byte_size(V) =< Max.
 hex(V) -> is_binary(V) andalso re:run(V, <<"^[0-9a-f]{64}$">>, [{capture, none}]) =:= match.
+hex40(V) -> is_binary(V) andalso re:run(V, <<"^[0-9a-f]{40}$">>, [{capture, none}]) =:= match.
+
+reserve_execution(Db, Job, Attempt, Kind, CpuMs, WallMs) ->
+    Limits = maps:get(<<"limits">>, Job),
+    need(is_integer(CpuMs) andalso CpuMs > 0 andalso is_integer(WallMs) andalso WallMs > 0, invalid_execution_budget),
+    Ceiling = case Kind of <<"build">> -> <<"build_ms">>; <<"evaluate">> -> <<"evaluation_ms">> end,
+    need(WallMs =< maps:get(Ceiling, Limits) andalso now_ms() + WallMs =< maps:get(<<"deadline">>, Job), invalid_execution_budget),
+    Key = execution_key(Attempt, Kind), Executions = maps:get(<<"executions">>, Job, #{}),
+    case maps:get(Key, Executions, undefined) of
+        undefined ->
+            Reserved = maps:get(<<"reserved_cpu_ms">>, Job, 0),
+            case Reserved + CpuMs =< maps:get(<<"cpu_ms">>, Limits) of
+                true ->
+                    Started = now_ms(),
+                    Lease = #{<<"id">> => ae_policy:sha256(crypto:strong_rand_bytes(32)),
+                        <<"job_id">> => maps:get(<<"id">>, Job), <<"attempt">> => Attempt, <<"kind">> => Kind,
+                        <<"status">> => <<"reserved">>, <<"cpu_ms">> => CpuMs, <<"wall_ms">> => WallMs,
+                        <<"reserved_at_ms">> => Started, <<"expires_at_ms">> => Started + WallMs},
+                    New = Job#{<<"reserved_cpu_ms">> => Reserved + CpuMs, <<"executions">> => Executions#{Key => Lease}},
+                    save(Db, New), event(Db, <<"execution_reserved">>, Lease), {ok, Lease};
+                false -> exhaust(Db, Job, <<"cpu_budget">>)
+            end;
+        #{<<"status">> := <<"reserved">>} -> {error, execution_outcome_unknown};
+        Record -> {ok, {completed, Record}}
+    end.
+execution(Job, Attempt, Kind, LeaseId) ->
+    need(maps:get(<<"attempts">>, Job) =:= Attempt, invalid_attempt),
+    Key = execution_key(Attempt, Kind),
+    Lease = maps:get(Key, maps:get(<<"executions">>, Job, #{}), undefined),
+    need(is_map(Lease) andalso maps:get(<<"id">>, Lease) =:= LeaseId, invalid_execution_lease), {Key, Lease}.
+execution_key(Attempt, Kind) when is_integer(Attempt), is_binary(Kind) ->
+    <<(integer_to_binary(Attempt))/binary, ":", Kind/binary>>.
 need(true, _) -> ok;
 need(false, Reason) -> throw({error, Reason}).
 now_ms() -> erlang:system_time(millisecond).
