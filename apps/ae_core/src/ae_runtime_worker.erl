@@ -28,9 +28,10 @@ init({Root, Routing, Config}) ->
         {ok, Listen} = gen_tcp:listen(0, [{ifaddr, {local, Path}} | ae_protocol:socket_options()]),
         try
             ok = file:change_mode(Path, 8#600),
-            Port = open_port({spawn_executable, os:find_executable("escript")},
+            {Executable, Args} = ae_sandbox:runtime(Root, Manifest, Directory, #{token => Token, config => Config}),
+            Port = open_port({spawn_executable, Executable},
                 [binary, exit_status, use_stdio, {env, ae_os:clean_env()},
-                 {args, [ae_artifacts:executable(Root, Manifest), Path, binary_to_list(Token)]}]),
+                 {args, Args}]),
             try
                 {ok, Socket} = gen_tcp:accept(Listen, 5000),
                 {ok, #{<<"type">> := <<"authenticate">>, <<"token">> := Token}} =

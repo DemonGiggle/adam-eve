@@ -58,6 +58,7 @@ handle_call(status, _, State) ->
     end,
     Reply = #{<<"routing">> => ae_store:routing(), <<"os_pid">> => maps:get(os_pid, State, null),
         <<"runtime_health">> => Health, <<"evolution_enabled">> => false,
+        <<"runtime_isolation">> => atom_to_binary(maps:get(runtime_isolation, maps:get(config, State), development), utf8),
         <<"handoff_enabled">> => maps:get(handoff_limits, maps:get(config, State), undefined) =/= undefined,
         <<"deployment">> => ae_store:active_deployment(),
         <<"last_event_seq">> => ae_store:last_seq()},

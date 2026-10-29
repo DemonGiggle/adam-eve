@@ -9,9 +9,19 @@ switches between them with durable approval, checkpoints, observation, and
 rollback. The seed calls a configured local Ollama model through a broker;
 conversation and pending turns survive runtime replacement. Evolution is disabled.
 
+Phase 2 foundations now include a durable bounded authoring ledger, scoped
+paginated source access, a protected patch policy, and an optional restricted
+runtime backend. The authoring libraries are not yet wired to agent capabilities
+or an end-to-end builder. See [docs/EVOLUTION.md](docs/EVOLUTION.md) and
+[docs/ISOLATION.md](docs/ISOLATION.md) for implemented behavior, required host
+configuration, and the remaining verification gaps.
+
 Development requirements: Erlang/OTP 24+, rebar3, a C compiler, make, and SQLite
 development headers, Git, and Python 3. Dependencies are pinned in the controller
 and seed `rebar.lock` files. Verified with OTP 24 and rebar3 3.22.1 on Linux.
+On Linux x86_64 the sandbox component tests additionally require Bubblewrap and
+libseccomp. Full resource-boundary tests need the cgroup delegation described in
+the isolation guide.
 
 ```sh
 scripts/build
@@ -130,6 +140,9 @@ fixing the cause. Runtime failures are audited.
 | `AE_OBSERVE_MS` | required for handoff | Post-switch observation window |
 | `AE_HEALTH_INTERVAL_MS` | required for handoff | Staged/active probe interval |
 | `AE_QUIESCE_TIMEOUT_MS` | required for handoff | In-flight turn drain deadline |
+| `AE_RUNTIME_ISOLATION` | `development` | Trusted manual seed or `bubblewrap` backend |
+| `AE_CGROUP_ROOT` | required for Bubblewrap | Delegated cgroup v2 subtree |
+| `AE_SANDBOX_LIMITS_JSON` | required for Bubblewrap | Explicit resource limits; see isolation guide |
 
 All conversation events remain durable even when only recent history is sent to
 the model. The LLM endpoint receives no controller credentials or agent-selected
@@ -166,10 +179,14 @@ Phase 1 checks exercise different manual generations through Adam → Eve → Ad
 approval expiry/denial/binding, staged and active crashes, controller/lifecycle
 process loss, in-flight quiescence, rollback of acknowledged work, cumulative
 source ancestry, and bounded recovery into a still-functional controller.
+Additional EUnit checks cover the evolution ledger, reservation/repair limits,
+proposal deduplication, protected patches, and bounded immutable source reads.
+The sandbox component checks run with `scripts/test`; full cgroup checks require
+an explicitly configured test subtree and report their skips when unavailable.
 
 This is the development seed milestone. The seed runs as the controller's OS
 user; separate processes and authenticated IPC do not sandbox hostile code.
-Restricted containers/users, portable checkpoint export, additional production
+Fully verified restricted execution, portable checkpoint export, additional production
 effects, isolated candidate builds/evaluation, self-evolution,
 retention cleanup, and backup/restore drills remain in the later spec phases.
 The escript retains compiled code and dependencies; its recorded host ERTS must

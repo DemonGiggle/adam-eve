@@ -13,12 +13,26 @@ load() ->
     Url = env("AE_LLM_URL", "http://127.0.0.1:11434/api/chat"),
     #{scheme := "http", host := Host} = uri_string:parse(Url),
     true = lists:member(Host, ["127.0.0.1", "localhost", "::1"]),
-    #{root => Root, model => Model, url => Url,
+    maps:merge(isolation(), #{root => Root, model => Model, url => Url,
       llm_timeout => integer_env("AE_LLM_TIMEOUT_MS", 30000, 100, 300000),
       max_tokens => integer_env("AE_LLM_MAX_TOKENS", 512, 1, 8192),
       context_turns => integer_env("AE_CONTEXT_TURNS", 8, 1, 8),
       max_llm_attempts => integer_env("AE_MAX_LLM_ATTEMPTS", 3, 1, 10),
-      handoff_limits => handoff_limits()}.
+      handoff_limits => handoff_limits()}).
+
+isolation() ->
+    case env("AE_RUNTIME_ISOLATION", "development") of
+        "development" -> #{runtime_isolation => development};
+        "bubblewrap" ->
+            CgroupRoot = required("AE_CGROUP_ROOT"),
+            true = filename:pathtype(CgroupRoot) =:= absolute,
+            Limits = jsx:decode(list_to_binary(required("AE_SANDBOX_LIMITS_JSON")), [return_maps, strict]),
+            Keys = [<<"memory_bytes">>, <<"pids">>, <<"cpu_percent">>, <<"cpu_seconds">>,
+                <<"address_space_bytes">>, <<"file_bytes">>, <<"open_files">>, <<"output_bytes">>, <<"wall_ms">>],
+            true = lists:sort(maps:keys(Limits)) =:= lists:sort(Keys),
+            true = lists:all(fun(V) -> is_integer(V) andalso V > 0 andalso V < (1 bsl 63) end, maps:values(Limits)),
+            #{runtime_isolation => bubblewrap, sandbox_cgroup_root => CgroupRoot, sandbox_limits => Limits}
+    end.
 
 handoff_limits() ->
     try
