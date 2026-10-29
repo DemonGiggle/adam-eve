@@ -1,0 +1,8 @@
+{application, ae_seed, [
+    {description, "Minimal isolated seed for adam-eve"},
+    {vsn, "0.1.0"},
+    {registered, [seed_sup, seed_agent]},
+    {mod, {seed_app, []}},
+    {applications, [kernel, stdlib, ae_protocol]},
+    {modules, []}
+]}.

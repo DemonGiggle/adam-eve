@@ -24,8 +24,7 @@ recv(Socket, Timeout) ->
     end.
 
 decode(Data) when is_binary(Data), byte_size(Data) =< 1048576 ->
-    try jsx:decode(Data, [return_maps, {strict, [comments, trailing_commas,
-                                                single_quotes, utf8]}]) of
+    try jsx:decode(Data, [return_maps, strict]) of
         Message ->
             case validate(Message) of
                 ok -> {ok, Message};
@@ -64,6 +63,7 @@ schema(<<"tool_result">>) -> [{<<"request_id">>, string}, {<<"idempotency_key">>
     {<<"result">>, object}];
 schema(<<"assistant_reply">>) -> [{<<"request_id">>, string}, {<<"text">>, text},
     {<<"event_refs">>, sequences}];
+schema(<<"turn_failed">>) -> [{<<"request_id">>, string}, {<<"reason">>, string}];
 schema(<<"health_check">>) -> [{<<"request_id">>, string}];
 schema(<<"health_status">>) -> [{<<"request_id">>, string}, {<<"status">>, string}];
 schema(<<"shutdown">>) -> [{<<"reason">>, string}];
