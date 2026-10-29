@@ -2,7 +2,7 @@
 -behaviour(gen_server).
 -export([start_link/1, boot/1, routing/0, activate/2, authorized/1,
          begin_turn/4, finish_turn/3, context/2, last_seq/0,
-         reserve_tool/3, finish_tool/4, events/0]).
+         reserve_tool/3, reserve_tool/4, finish_tool/4, retry_turn/1, cancel_turn/1, events/0]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
 
 start_link(Root) -> gen_server:start_link({local, ?MODULE}, ?MODULE, Root, []).
@@ -14,8 +14,11 @@ begin_turn(Auth, Request, Session, Message) -> call({begin_turn, Auth, Request, 
 finish_turn(Auth, Request, Text) -> call({finish_turn, Auth, Request, Text}).
 context(Request, Limit) -> call({context, Request, Limit}).
 last_seq() -> call(last_seq).
-reserve_tool(Auth, Request, Key) -> call({reserve_tool, Auth, Request, Key}).
+reserve_tool(Auth, Request, Key) -> reserve_tool(Auth, Request, Key, 3).
+reserve_tool(Auth, Request, Key, MaxAttempts) -> call({reserve_tool, Auth, Request, Key, MaxAttempts}).
 finish_tool(Auth, Request, Key, Result) -> call({finish_tool, Auth, Request, Key, Result}).
+retry_turn(Request) -> call({retry_turn, Request}).
+cancel_turn(Request) -> call({cancel_turn, Request}).
 events() -> call(events).
 call(Request) -> gen_server:call(?MODULE, Request, 15000).
 
@@ -93,7 +96,8 @@ dispatch({context, Request, Limit}, Db) ->
     case turn(Db, Request) of
         {Session, _, _, _, Seq} ->
             Turns = rows(Db, "SELECT message,reply FROM (SELECT message,reply,user_seq "
-                "FROM turns WHERE session_id=? AND user_seq<=? ORDER BY user_seq DESC LIMIT ?) "
+                "FROM turns WHERE session_id=? AND user_seq<=? AND status!='cancelled' "
+                "ORDER BY user_seq DESC LIMIT ?) "
                 "ORDER BY user_seq", [Session, Seq, Limit]),
             lists:flatmap(fun({Message, Reply}) ->
                 User = #{<<"role">> => <<"user">>, <<"content">> => Message},
@@ -105,7 +109,7 @@ dispatch({context, Request, Limit}, Db) ->
         _ -> {error, unknown_request}
     end;
 dispatch(last_seq, Db) -> last(Db);
-dispatch({reserve_tool, Auth, Request, Key}, Db) ->
+dispatch({reserve_tool, Auth, Request, Key, MaxAttempts}, Db) ->
     require_auth(Db, Auth),
     case turn(Db, Request) of
         {_, _, <<"pending">>, null, _} ->
@@ -113,8 +117,22 @@ dispatch({reserve_tool, Auth, Request, Key}, Db) ->
                       [Request, Key]) of
                 [] ->
                     _ = sql(Db, "INSERT INTO tools VALUES(?,?,'reserved',NULL)", [Request, Key]),
+                    _ = sql(Db, "INSERT INTO tool_attempts VALUES(?,?,1)", [Request, Key]),
                     event(Db, <<"tool_reserved">>, #{<<"request_id">> => Request, <<"key">> => Key}),
                     {ok, reserved};
+                [{<<"retryable">>, _}] ->
+                    [{Attempts}] = rows(Db, "SELECT attempts FROM tool_attempts WHERE request_id=? AND key=?",
+                                        [Request, Key]),
+                    case Attempts < MaxAttempts of
+                        true ->
+                            _ = sql(Db, "UPDATE tool_attempts SET attempts=attempts+1 WHERE request_id=? AND key=?",
+                                    [Request, Key]),
+                            _ = sql(Db, "UPDATE tools SET status='reserved',result=NULL WHERE request_id=? AND key=?",
+                                    [Request, Key]),
+                            event(Db, <<"tool_reserved">>, #{<<"request_id">> => Request, <<"key">> => Key}),
+                            {ok, reserved};
+                        false -> {error, attempt_limit}
+                    end;
                 [{<<"completed">>, Data}] -> {ok, {completed, jsx:decode(Data, [return_maps])}};
                 _ -> {error, tool_outcome_unknown}
             end;
@@ -130,6 +148,26 @@ dispatch({finish_tool, Auth, Request, Key, Result}, Db) ->
                 <<"key">> => Key, <<"result">> => Result}),
             {ok, Result};
         _ -> {error, invalid_tool}
+    end;
+dispatch({retry_turn, Request}, Db) ->
+    %% Operator-only reconciliation. Inference can be repeated, but may incur another charge.
+    case {turn(Db, Request), rows(Db, "SELECT status,result FROM tools WHERE request_id=? AND key='llm'", [Request])} of
+        {{_, _, <<"pending">>, null, _}, [{Status, Data}]} ->
+            case Status =:= <<"reserved">> orelse
+                 (Status =:= <<"completed">> andalso maps:is_key(<<"error">>, jsx:decode(Data, [return_maps]))) of
+                true ->
+                    _ = sql(Db, "UPDATE tools SET status='retryable' WHERE request_id=? AND key='llm'", [Request]),
+                    event(Db, <<"operator_retry">>, #{<<"request_id">> => Request}), ok;
+                false -> {error, retry_not_needed}
+            end;
+        _ -> {error, retry_not_needed}
+    end;
+dispatch({cancel_turn, Request}, Db) ->
+    case turn(Db, Request) of
+        {_, _, <<"pending">>, null, _} ->
+            _ = sql(Db, "UPDATE turns SET status='cancelled' WHERE request_id=?", [Request]),
+            event(Db, <<"turn_cancelled">>, #{<<"request_id">> => Request}), ok;
+        _ -> {error, invalid_turn}
     end;
 dispatch(events, Db) ->
     [{Seq, Kind, jsx:decode(Data, [return_maps])} || {Seq, Kind, Data} <-
@@ -180,5 +218,7 @@ schema() -> [
     "CREATE TABLE IF NOT EXISTS turns(request_id TEXT PRIMARY KEY,session_id TEXT NOT NULL,message TEXT NOT NULL,"
         "status TEXT NOT NULL,reply TEXT,user_seq INTEGER NOT NULL REFERENCES events(seq))",
     "CREATE TABLE IF NOT EXISTS tools(request_id TEXT NOT NULL REFERENCES turns(request_id),key TEXT NOT NULL,"
-        "status TEXT NOT NULL,result TEXT,PRIMARY KEY(request_id,key))"
+        "status TEXT NOT NULL,result TEXT,PRIMARY KEY(request_id,key))",
+    "CREATE TABLE IF NOT EXISTS tool_attempts(request_id TEXT NOT NULL,key TEXT NOT NULL,attempts INTEGER NOT NULL,"
+        "PRIMARY KEY(request_id,key),FOREIGN KEY(request_id,key) REFERENCES tools(request_id,key))"
 ].

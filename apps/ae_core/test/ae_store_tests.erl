@@ -34,7 +34,21 @@ durability_and_fencing_test() ->
         ?assertEqual({error, tool_outcome_unknown}, ae_store:reserve_tool(Auth2, <<"r2">>, <<"llm">>)),
         ?assertEqual(2, length([ok || {_, <<"user_message">>, _} <- ae_store:events()])),
         ?assertEqual(1, length([ok || {_, <<"assistant_reply">>, _} <- ae_store:events()])),
-        gen_server:stop(Pid2)
+        gen_server:stop(Pid2),
+        {ok, Pid3} = ae_store:start_link(Root),
+        {ok, Third} = ae_store:activate(Second, <<"instance-3">>),
+        Auth3 = auth(Third),
+        ?assertEqual({error, tool_outcome_unknown}, ae_store:reserve_tool(Auth3, <<"r2">>, <<"llm">>, 2)),
+        ?assertEqual(ok, ae_store:retry_turn(<<"r2">>)),
+        ?assertEqual({ok, reserved}, ae_store:reserve_tool(Auth3, <<"r2">>, <<"llm">>, 2)),
+        Failure = #{<<"error">> => <<"provider_unavailable">>},
+        ?assertEqual({ok, Failure}, ae_store:finish_tool(Auth3, <<"r2">>, <<"llm">>, Failure)),
+        ?assertEqual(ok, ae_store:retry_turn(<<"r2">>)),
+        ?assertEqual({error, attempt_limit}, ae_store:reserve_tool(Auth3, <<"r2">>, <<"llm">>, 2)),
+        ?assertEqual(ok, ae_store:cancel_turn(<<"r2">>)),
+        ?assertEqual({ok, pending}, ae_store:begin_turn(Auth3, <<"r3">>, <<"s1">>, <<"next">>)),
+        ?assertEqual(3, length(ae_store:context(<<"r3">>, 20))),
+        gen_server:stop(Pid3)
     after
         case whereis(ae_store) of undefined -> ok; P -> gen_server:stop(P) end,
         file:del_dir_r(Root)

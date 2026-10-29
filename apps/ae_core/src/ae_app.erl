@@ -3,7 +3,7 @@
 -export([start/2, stop/1]).
 
 start(_Type, _Args) ->
-    {ok, Root} = application:get_env(ae_core, data_root),
-    ae_sup:start_link(Root).
+    {ok, Config} = application:get_env(ae_core, config),
+    ae_sup:start_link(Config).
 
 stop(_State) -> ok.
