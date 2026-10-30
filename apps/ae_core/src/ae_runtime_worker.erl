@@ -13,7 +13,9 @@ descriptor(Pid) -> gen_server:call(Pid, descriptor).
 activate(Pid, Route) -> gen_server:call(Pid, {activate, Route}).
 restore(Pid, Checkpoint) -> gen_server:call(Pid, {restore, Checkpoint}, 35000).
 simulate(Pid) -> gen_server:call(Pid, simulate, 10000).
-author(Pid, Job) -> gen_server:call(Pid, {author, Job}, 315000).
+author(Pid, Job) ->
+    Timeout = max(10000, maps:get(<<"deadline">>, Job) - erlang:system_time(millisecond) + 15000),
+    gen_server:call(Pid, {author, Job}, Timeout).
 
 init({Root, Routing, Config}) ->
     process_flag(trap_exit, true),
@@ -113,7 +115,7 @@ handle_call({author, Job}, _, #{mode := active, socket := Socket, auth := Auth} 
                 <<"target_slot">> => maps:get(<<"target_slot">>, Current), <<"limits">> => maps:get(<<"limits">>, Current)},
             ok = send(Socket, <<"evolution_context">>, Context),
             ok = author_feedback(Socket, Current),
-            Remaining = max(0, min(300000, maps:get(<<"deadline">>, Current) - erlang:system_time(millisecond))),
+            Remaining = max(0, maps:get(<<"deadline">>, Current) - erlang:system_time(millisecond)),
             Limits = maps:get(<<"limits">>, Current),
             Requests = maps:get(<<"max_source_calls">>, Limits) + maps:get(<<"max_llm_calls">>, Limits) + 1,
             Reply = author_exchange(State, Id, erlang:monotonic_time(millisecond) + Remaining, Requests),

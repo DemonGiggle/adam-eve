@@ -13,7 +13,11 @@ promote(Id, Pid) -> gen_server:call(?MODULE, {promote, Id, Pid}, 400000).
 rollback(Id, Reason) -> gen_server:call(?MODULE, {rollback, Id, Reason}, 65000).
 check(Expected) -> gen_server:call(?MODULE, {check, Expected}, 10000).
 restore_ready(BackupId, Origin) -> gen_server:call(?MODULE, {restore_ready, BackupId, Origin}, 15000).
-author(Id) -> gen_server:call(?MODULE, {author, Id}, 320000).
+author(Id) ->
+    Timeout = case ae_store:evolution({get, Id}) of
+        #{<<"deadline">> := Deadline} -> max(10000, Deadline - erlang:system_time(millisecond) + 20000);
+        _ -> 10000 end,
+    gen_server:call(?MODULE, {author, Id}, Timeout).
 cancel_author(Id) -> gen_server:call(?MODULE, {cancel_author, Id}, 65000).
 
 init(#{root := Root} = Config) ->

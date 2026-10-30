@@ -118,6 +118,10 @@ authoring uses temperature zero. This follows Ollama's
 [structured output interface](https://docs.ollama.com/capabilities/structured-outputs).
 The agent and broker still validate actions, scope and budgets independently;
 schema-constrained decoding does not establish source or patch correctness.
+The authoring exchange and its RPC waits use the durable job deadline rather
+than an independent five-minute cap; every individual HTTP call remains bounded
+by the configured provider timeout. Source-read examples use the job's permitted
+page size to reduce unnecessary model round trips.
 The authoring exchange has a request-count ceiling and a deadline even if a
 misbehaving seed continuously sends already-buffered messages. User turns are
 temporarily busy during authoring; health/status and recovery stay in the trusted
