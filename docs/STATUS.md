@@ -47,8 +47,12 @@ and rolls back while preserving its reply/tool result. The orchestrated variant
 also repairs an actual compiler failure within the same job, serves conversation
 during evaluation and pending approval, disables evolution while keeping service
 available, restarts, explicitly re-enables, and deduplicates the original trigger
-across epoch changes. The full restricted failure matrix and successive authored
-generations remain pending.
+across epoch changes. A separate host test now kills the whole controller during
+a reserved model call, generated pending approval, and observation after an
+acknowledged candidate reply. Restart retains reservations and code, refuses old
+approvals, never reissues unknown authoring, and rolls back an unobserved candidate
+without losing its reply. Internal commit/activation fault boundaries and
+successive live-authored generations remain pending.
 
 Generated releases can now receive a durable independent scorecard through a
 supervised evaluator. Digest-only manual staging still rejects them with

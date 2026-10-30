@@ -96,7 +96,14 @@ author exchange is interrupted and fenced. Linked deployments are reconciled
 with the deployment manager: uncommitted promotions are rejected, incomplete
 observations roll back. Promotion restore and rollback intent are durable before
 checkpoint/replay. Retrying an already committed rollback does not stop the
-restored active runtime. Broader fault-injection coverage remains pending.
+restored active runtime. `test/integration/evolution_crash.py` kills the whole
+controller during a reserved model call, pending generated approval, and
+observation after a candidate acknowledges a reply. Real restricted runtimes
+recover with fresh epochs, retain reservations and code, refuse stale approvals,
+and replay acknowledged replies without another provider call. Unknown authoring
+is not reissued; precommit approval is rejected; unobserved committed code rolls
+back. Additional internal commit/activation boundaries remain to be exercised
+through whole-controller fault injection.
 
 ## Authoring path
 
