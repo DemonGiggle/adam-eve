@@ -2,7 +2,7 @@
 
 [![Erlang/OTP 24+](https://img.shields.io/badge/Erlang%2FOTP-24%2B-A90533?logo=erlang&logoColor=white)](https://www.erlang.org/)
 [![Platform: Linux](https://img.shields.io/badge/platform-Linux-FCC624?logo=linux&logoColor=black)](docs/ISOLATION.md)
-[![Tests: scripts/test](https://img.shields.io/badge/tests-scripts%2Ftest-blue)](scripts/test)
+[![CI](https://github.com/DemonGiggle/adam-eve/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/DemonGiggle/adam-eve/actions/workflows/ci.yml)
 
 > A self-evolving AI agent built on Erlang/OTP
 
@@ -133,5 +133,6 @@ Run the suite on the host without a model or provider credentials:
 scripts/test
 ```
 
-The suite uses local provider fixtures. Some sandbox checks require a delegated
-cgroup v2 test root; see [Isolation](docs/ISOLATION.md).
+The suite uses local provider fixtures. GitHub Actions runs the host suite on
+pushes and pull requests. Some sandbox checks require a delegated cgroup v2 test
+root and are skipped in CI; see [Isolation](docs/ISOLATION.md).
