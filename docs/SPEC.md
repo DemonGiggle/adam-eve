@@ -36,7 +36,7 @@ Adam and Eve are deployment destinations in one continuing lineage, not independ
 - Zero interruption of every in-flight streamed response during a swap; MVP may finish or retry at well-defined boundaries.
 - Distributed multi-host consensus, multiple active identities, or autonomous privilege expansion.
 - Guaranteeing that every accepted code change improves general intelligence.
-- OS sandboxing and kernel enforcement of aggregate CPU, memory, and process limits. Job reservations and operation deadlines are accounting and coordination, not host resource isolation.
+- Kernel enforcement of aggregate CPU, memory, and process limits (deferred to v0.2). v0.1 job reservations and operation deadlines are accounting and coordination, not host resource isolation.
 
 ## 3. Identity and Terms
 
@@ -251,7 +251,7 @@ For the single-host MVP, SQLite with WAL and transactional routing records is ac
 
 ### 8.1 Persistent code and artifact storage
 
-The controller owns persistent storage outside all runtime containers and disposable build workspaces. Keep these as distinct durable resources:
+The controller owns persistent storage separately from disposable runtime and build workspaces. Keep these as distinct durable resources:
 
 - **Source repository:** Complete source revisions with protected generation/attempt references; do not rely on a worktree, reflog, or a dangling Git commit surviving cleanup.
 - **Artifact store:** Complete executable releases addressed by content digest. Retain the exact executable that passed evaluation; rebuilding a source revision is not a substitute for retaining it.
@@ -342,7 +342,7 @@ adam-eve/
 │   ├── ae_core/             # trusted app, supervisor, router, store
 │   ├── ae_protocol/         # wire schemas and protocol tests
 │   ├── ae_evolution/        # orchestration state machine
-│   ├── ae_runner/           # external BEAM process/container launcher
+│   ├── ae_runner/           # external BEAM process launcher
 │   ├── ae_broker/           # tools, permissions, budgets
 │   └── ae_seed/             # minimal evolvable agent (built separately)
 ├── test/
