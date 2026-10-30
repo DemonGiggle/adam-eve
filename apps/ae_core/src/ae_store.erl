@@ -9,6 +9,7 @@
          preparing_promotion/2, starting_rollback/2,
          active_deployment/0, promote/4, rollback/5, complete/2, recover_handoff/0,
          activate_checkpoint/3, runtime_failed/2, evolution/1, recovery/0, verify_recovery/3]).
+-export([memory/1, context_snapshot/2]).
 
 start_link(Root) -> gen_server:start_link({local, ?MODULE}, ?MODULE, Root, []).
 boot(Manifest) -> call({boot, Manifest}).
@@ -46,6 +47,8 @@ recover_handoff() -> call(recover_handoff).
 activate_checkpoint(Expected, Descriptor, Checkpoint) -> call({activate_checkpoint, Expected, Descriptor, Checkpoint}).
 runtime_failed(Expected, Reason) -> call({runtime_failed, Expected, Reason}).
 evolution(Operation) -> call({evolution, Operation}).
+memory(Operation) -> call({memory, Operation}).
+context_snapshot(Request, Limit) -> call({context_snapshot, Request, Limit}).
 recovery() -> call(recovery).
 verify_recovery(Expected, BackupId, Origin) -> call({verify_recovery, Expected, BackupId, Origin}).
 call(Request) -> gen_server:call(?MODULE, Request, 15000).
@@ -58,7 +61,7 @@ init(Root) ->
     _ = sql(Db, "PRAGMA synchronous=FULL", []),
     _ = sql(Db, "PRAGMA foreign_keys=ON", []),
     _ = sql(Db, "PRAGMA busy_timeout=5000", []),
-    lists:foreach(fun(Statement) -> sql(Db, Statement, []) end, schema() ++ ae_evolution_store:schema()),
+    lists:foreach(fun(Statement) -> sql(Db, Statement, []) end, schema() ++ ae_evolution_store:schema() ++ ae_memory:schema()),
     transaction(Db, fun() ->
         case route(Db) of
             undefined -> ok;
@@ -76,6 +79,13 @@ handle_info(_, Db) -> {noreply, Db}.
 terminate(_, Db) -> sqlite3:close(Db).
 
 dispatch({evolution, Operation}, Db) -> ae_evolution_store:dispatch(Db, Operation);
+dispatch({memory, Operation}, Db) -> ae_memory:dispatch(Db, Operation);
+dispatch({context_snapshot, Request, Limit}, Db) ->
+    case dispatch({context, Request, Limit}, Db) of
+        Messages when is_list(Messages) ->
+            #{<<"messages">> => Messages, <<"memory">> => ae_memory:context(Db, Request)};
+        Error -> Error
+    end;
 dispatch({boot, Manifest}, Db) ->
     case route(Db) of
         undefined ->
@@ -112,6 +122,7 @@ dispatch({begin_turn, Auth, Request, Session, Message}, Db) ->
                         <<"session_id">> => Session, <<"text">> => Message}),
                     _ = sql(Db, "INSERT INTO turns VALUES(?,?,?,'pending',NULL,?)",
                         [Request, Session, Message, Seq]),
+                    ok = ae_memory:dispatch(Db, {pin, Request}),
                     {ok, pending};
                 _ -> {error, pending_turn}
             end;
@@ -240,9 +251,9 @@ dispatch({checkpoint, Expected}, Db) ->
     require_baseline(Db, Expected),
     Seq = last(Db),
     Pending = [Id || {Id} <- rows(Db, "SELECT request_id FROM turns WHERE status='pending' ORDER BY user_seq", [])],
-    Envelope = #{<<"schema_version">> => 1, <<"identity_id">> => <<"adam-eve/default">>,
+    Envelope = maps:merge(ae_memory:dispatch(Db, checkpoint), #{<<"schema_version">> => 1, <<"identity_id">> => <<"adam-eve/default">>,
         <<"generation">> => maps:get(<<"digest">>, maps:get(<<"artifact">>, Expected)),
-        <<"last_event_seq">> => Seq, <<"pending_task_ids">> => Pending},
+        <<"last_event_seq">> => Seq, <<"pending_task_ids">> => Pending}),
     Id = ae_policy:digest(Envelope),
     _ = sql(Db, "INSERT OR IGNORE INTO checkpoints VALUES(?,?)", [Id, jsx:encode(Envelope)]),
     event(Db, <<"checkpoint_saved">>, #{<<"checkpoint_id">> => Id, <<"last_event_seq">> => Seq}),

@@ -68,7 +68,7 @@ the Phase 2 self-evolution demonstration.
 |---|---|
 | 1. Continuing identity | Verified across manual generations and controller/runtime restart. Generated-generation acceptance remains pending. |
 | 2. Active-epoch effects only | Transactional runtime/epoch checks and stale-request rejection are tested. |
-| 3. Conversation and pending tasks survive | Restart/handoff tests retain turns and tool-call reservations/results. Richer task workflows are not implemented. |
+| 3. Conversation and pending tasks survive | Restart/handoff tests retain turns and tool-call reservations/results. Versioned facts, preferences and summaries with source events survive context eviction, restart, handoff, rollback and backup restore; turn admission pins the memory revision. Richer task workflows remain later work. |
 | 4. Isolated candidate builds/tests | Restricted builds and independent comparisons run without production store/tool access. Full lifecycle acceptance remains pending. |
 | 5. Failed gates and rollback | Manual failures and generated score/approval mismatches preserve the active generation. Actual restricted generated-candidate observation failure rolls back acknowledged work. |
 | 6. Durable promotions/rollbacks | Manual and generated deployments update routing, audit and linked evolution records transactionally. Full orchestration/restart coverage remains pending. |
@@ -94,4 +94,4 @@ the initial live authoring attempt was cancelled for a malformed response before
 any build. Successful successive live-model generations remain unproven.
 
 Implementation details and test entry points are in [EVOLUTION.md](EVOLUTION.md),
-[BUILD.md](BUILD.md), [ISOLATION.md](ISOLATION.md), and [RECOVERY.md](RECOVERY.md).
+[BUILD.md](BUILD.md), [ISOLATION.md](ISOLATION.md), [MEMORY.md](MEMORY.md), and [RECOVERY.md](RECOVERY.md).

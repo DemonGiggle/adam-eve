@@ -36,6 +36,17 @@ command(#{<<"op">> := <<"turn">>, <<"request_id">> := Request,
         {error, Reason} -> #{<<"request_id">> => Request, <<"error">> => reason(Reason)}
     end;
 command(#{<<"op">> := <<"status">>}) -> ae_router:status();
+command(#{<<"op">> := <<"memory_put">>, <<"origin_ref">> := Origin, <<"kind">> := Kind, <<"key">> := Key,
+          <<"value">> := Value, <<"source_event_seqs">> := Sources, <<"expected_revision">> := Expected} = Command)
+        when map_size(Command) =:= 7 -> memory_result({put, Origin, Kind, Key, Value, Sources, Expected});
+command(#{<<"op">> := <<"memory_delete">>, <<"origin_ref">> := Origin, <<"kind">> := Kind, <<"key">> := Key,
+          <<"source_event_seqs">> := Sources, <<"expected_revision">> := Expected} = Command)
+        when map_size(Command) =:= 6 -> memory_result({delete, Origin, Kind, Key, Sources, Expected});
+command(#{<<"op">> := <<"memory">>} = Command) when map_size(Command) =:= 1 -> memory_result({snapshot, null, 0, 32});
+command(#{<<"op">> := <<"memory">>, <<"revision">> := Revision, <<"offset">> := Offset, <<"count">> := Count} = Command)
+        when map_size(Command) =:= 4 -> memory_result({snapshot, Revision, Offset, Count});
+command(#{<<"op">> := <<"memory_get">>, <<"kind">> := Kind, <<"key">> := Key, <<"revision">> := Revision} = Command)
+        when map_size(Command) =:= 4 -> memory_result({get, Kind, Key, Revision});
 command(#{<<"op">> := <<"evolve">>, <<"origin_ref">> := Origin, <<"objective">> := Objective} = Command) when map_size(Command) =:= 3 ->
     case ae_evolution:trigger(Origin, Objective) of {ok, Job} -> Job; Error -> result(Error) end;
 command(#{<<"op">> := <<"evolution">>, <<"job_id">> := Id} = Command) when map_size(Command) =:= 2 ->
@@ -63,6 +74,8 @@ command(#{<<"op">> := <<"history">>}) ->
                        {Seq, Kind, Data} <- ae_store:events()]};
 command(_) -> #{<<"error">> => <<"unknown_command">>}.
 
+memory_result(Operation) ->
+    case ae_store:memory(Operation) of {ok, Record} -> Record; Error -> result(Error) end.
 result(ok) -> #{<<"ok">> => true};
 result({error, Reason}) -> #{<<"error">> => reason(Reason)}.
 reason(Reason) when is_atom(Reason) -> atom_to_binary(Reason, utf8);

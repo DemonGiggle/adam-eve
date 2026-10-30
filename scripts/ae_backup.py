@@ -23,6 +23,7 @@ HEX40 = re.compile(r"[0-9a-f]{40}\Z")
 TABLES = {"routing", "events", "turns", "tools", "tool_attempts", "artifacts",
           "checkpoints", "deployments", "control", "evolution_jobs",
           "evolution_proposals", "evolution_llm_calls"}
+MEMORY_TABLES = {"memory_versions", "memory_requests", "turn_memory"}
 POLICY_KEYS = {"schedule", "minimum_copies", "rpo_ms", "rto_ms", "failure_domain",
                "disk_reserve_bytes"}
 
@@ -202,10 +203,12 @@ def verify_state(root, point):
         require(connection.execute("PRAGMA integrity_check").fetchall() == [("ok",)], "SQLite integrity failure")
         require(not connection.execute("PRAGMA foreign_key_check").fetchall(), "SQLite reference failure")
         tables = {r[0] for r in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-        require(tables - {"sqlite_sequence"} == TABLES, "unsupported state schema")
+        actual = tables - {"sqlite_sequence"}
+        require(actual in (TABLES, TABLES | MEMORY_TABLES), "unsupported state schema")
         route = json.loads(connection.execute("SELECT data FROM routing WHERE id=1").fetchone()[0])
         seq = connection.execute("SELECT COALESCE(MAX(seq),0) FROM events").fetchone()[0]
         require(route == point["routing"] and seq == point["event_seq"], "snapshot recovery point mismatch")
+        memory_head = verify_memory(connection, seq) if MEMORY_TABLES <= actual else 0
         recovery = connection.execute("SELECT data FROM control WHERE name='restore'").fetchone()
         floor = max(route["epoch"], json.loads(recovery[0])["epoch_floor"] if recovery else 0)
         require(floor == point["epoch_floor"], "snapshot epoch floor mismatch")
@@ -227,7 +230,60 @@ def verify_state(root, point):
                 if table == "checkpoints":
                     require(record["generation"] in retained and record["last_event_seq"] <= seq,
                             "checkpoint outside retained recovery point")
+                    revision = record.get("memory_revision", 0)
+                    require(type(revision) is int and 0 <= revision <= memory_head, "checkpoint memory revision unavailable")
+                    if revision:
+                        memory_seq = connection.execute("SELECT event_seq FROM memory_versions WHERE revision=?", (revision,)).fetchone()
+                        require(memory_seq and memory_seq[0] <= record["last_event_seq"], "checkpoint memory outside event boundary")
+                    summary = record.get("context_summary_ref")
+                    if summary is not None:
+                        require(isinstance(summary, str) and re.fullmatch(r"memory-summary:[1-9][0-9]*", summary),
+                                "invalid checkpoint summary reference")
+                        summary_revision = int(summary.split(":")[1])
+                        rows = connection.execute("SELECT kind,deleted,event_seq FROM memory_versions WHERE revision=?",
+                                                  (summary_revision,)).fetchall()
+                        require(summary_revision <= revision and rows and rows[0][0:2] == ("summary", 0)
+                            and rows[0][2] <= record["last_event_seq"], "checkpoint summary unavailable")
     return retained
+
+
+def verify_memory(connection, event_seq):
+    head, versions = 0, {}
+    for revision, kind, key, deleted, seq, encoded in connection.execute(
+            "SELECT revision,kind,key,deleted,event_seq,data FROM memory_versions ORDER BY revision"):
+        record = json.loads(encoded)
+        require(revision == head + 1 and kind in ("fact", "preference", "summary") and deleted in (0, 1),
+                "invalid memory version")
+        require(record["revision"] == revision and record["kind"] == kind and record["key"] == key
+            and record["deleted"] is bool(deleted) and record["event_seq"] == seq and 0 < seq <= event_seq,
+                "memory metadata mismatch")
+        for text, maximum in ((key, 128), (record["origin_ref"], 256)):
+            require(isinstance(text, str) and 0 < len(text.encode()) <= maximum, "invalid memory key")
+        value = record["value"]
+        require(value is None if deleted else isinstance(value, str) and 0 < len(value.encode()) <= 4096,
+                "invalid memory value")
+        sources = record["source_event_seqs"]
+        require(isinstance(sources, list) and 0 < len(sources) <= 16
+            and all(type(source) is int and 0 < source < seq for source in sources)
+            and len(set(sources)) == len(sources), "invalid memory sources")
+        require(all(connection.execute("SELECT 1 FROM events WHERE seq=?", (source,)).fetchone()
+            for source in sources), "memory source event unavailable")
+        event = connection.execute("SELECT kind,data FROM events WHERE seq=?", (seq,)).fetchone()
+        require(event and event[0] == "memory_updated" and json.loads(event[1]) == {
+            k: v for k, v in record.items() if k != "event_seq"}, "memory event mismatch")
+        versions[revision] = record
+        head = revision
+    origins = set()
+    for origin, fingerprint, revision in connection.execute("SELECT origin_ref,fingerprint,revision FROM memory_requests"):
+        require(HEX64.fullmatch(fingerprint) and revision in versions and versions[revision]["origin_ref"] == origin,
+                "memory idempotency record mismatch")
+        origins.add(revision)
+    require(origins == set(versions), "memory idempotency records unavailable")
+    for revision, user_seq in connection.execute("SELECT m.revision,t.user_seq FROM turn_memory m "
+                                                "JOIN turns t ON t.request_id=m.request_id"):
+        require(type(revision) is int and 0 <= revision <= head and
+            (revision == 0 or versions[revision]["event_seq"] < user_seq), "invalid turn memory revision")
+    return head
 
 
 def inventory(root):

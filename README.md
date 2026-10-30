@@ -3,6 +3,8 @@
 An Erlang/OTP agent with a trusted controller and replaceable Adam/Eve runtimes.
 The architecture and planned milestones are in [docs/SPEC.md](docs/SPEC.md).
 The current milestone and acceptance gaps are tracked in [docs/STATUS.md](docs/STATUS.md).
+Versioned facts, preferences and summaries, their source references, and the
+operator memory commands are described in [docs/MEMORY.md](docs/MEMORY.md).
 
 The development implementation now supports Phase 1: a trusted OTP controller
 serves isolated Adam/Eve BEAM processes, stages manually built candidates, and
