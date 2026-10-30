@@ -9,7 +9,7 @@ enabled only with complete limits and the restricted runtime backend.
 The operator has deferred complete aggregate kernel CPU/memory/process
 enforcement to v0.2. Namespace/filesystem/network isolation, broker fencing,
 attempt/token/spending budgets, and timeouts remain v0.1 requirements. A host
-profile using per-process limits is being implemented so v0.1 verification no
+profile using per-process limits is implemented so v0.1 verification no
 longer requires a VM or delegated cgroups. Existing cgroup checks remain useful
 v0.2 evidence rather than an MVP completion gate.
 
@@ -18,7 +18,7 @@ v0.2 evidence rather than an MVP completion gate.
 | SPEC milestone | Progress | Remaining exit evidence |
 |---|---|---|
 | Phase 0: reliable seed | Implemented and integration-tested with a fixture provider: CLI, brokered LLM calls, durable conversations, retained source/releases, process restart. | A live model is not required by the automated suite; no live-model quality claim is established. |
-| Phase 1: dual-slot handoff | Implemented and integration-tested with manually authored generations: Adam → Eve → Adam, explicit approval, fencing, checkpoint/replay, observation, crash recovery, and rollback of acknowledged work. | The full handoff suite has not yet been repeated with both slots using the restricted runtime backend. |
+| Phase 1: dual-slot handoff | Implemented and integration-tested with manually authored generations: Adam → Eve → Adam, explicit approval, fencing, checkpoint/replay, observation, crash recovery, and rollback of acknowledged work. The full suite also passes directly on the host with both slots using Bubblewrap/process limits. | Complete aggregate resource enforcement belongs to v0.2. |
 | Phase 2: controlled self-evolution | Partial. The evolution state machine and CLI connect authoring/repair, isolated builds/evaluation, job-bound manual approval, promotion/rollback, persistent disable, and local backup/restore. Publication has process-kill coverage. | Retention/cleanup recovery, the restricted restart/failure matrix, and two successive live-LLM-authored promotions. |
 | Phase 3: autonomous low-risk evolution | Not implemented. | Scheduled triggers and policy-authorized promotion are later work. |
 | Phase 4: advanced capabilities | Not implemented. | Explicitly outside MVP scope. |
@@ -36,8 +36,10 @@ with both the author runtime and compiler restricted by Bubblewrap and cgroups.
 Separate VM checks cover kernel memory/process/CPU limits, namespace restrictions,
 sealed releases, runtime launcher failure, fresh epochs, retained completed and
 unknown effects, and checkpoint restart. The native host lacks delegated cgroups,
-so those positive checks were run as an unprivileged user in a disposable Linux
-VM. Additional VM checks now cover independent baseline/candidate comparisons,
+so initial aggregate-limit checks ran as an unprivileged user in a disposable
+Linux VM. The explicit v0.1 process profile now also passes host builds,
+independent comparisons, namespace teardown, runtime recovery and orchestrated
+generated promotion/crash/rollback. Additional VM checks cover independent baseline/candidate comparisons,
 passing and failing EUnit/Common Test suites, predecessor restore, and the
 supervised author/build/evaluation path. A further generated-candidate test
 explicitly stages, approves, promotes, acknowledges work, kills the candidate,

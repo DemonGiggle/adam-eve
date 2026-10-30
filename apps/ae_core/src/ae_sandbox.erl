@@ -18,6 +18,7 @@ runtime(Root, Manifest, Directory, #{token := Token, config := Config}) ->
             Deadline = case maps:find(runtime_deadline, Config) of
                 {ok, At} -> ["--deadline-ms", integer_to_list(At)]; error -> [] end,
             {"/usr/bin/python3", [Helper, "--cgroup-root", CgroupRoot,
+                "--resource-limits-mode", binary_to_list(maps:get(resource_limits_mode, Config, <<"cgroup">>)),
                 "--limits-json", binary_to_list(jsx:encode(Limits)),
                 "--runtime", ae_artifacts:executable(Root, Manifest),
                 "--digest", binary_to_list(maps:get(<<"digest">>, Manifest)),

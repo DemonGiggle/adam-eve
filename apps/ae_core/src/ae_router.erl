@@ -113,6 +113,9 @@ handle_call(status, _, State) ->
         <<"recovery">> => Recovery,
         <<"runtime_health">> => Health, <<"evolution_enabled">> => ae_evolution:enabled(maps:get(config, State)),
         <<"runtime_isolation">> => atom_to_binary(maps:get(runtime_isolation, maps:get(config, State), development), utf8),
+        <<"resource_limits_mode">> => case maps:get(runtime_isolation, maps:get(config, State), development) of
+            development -> <<"none">>;
+            bubblewrap -> maps:get(resource_limits_mode, maps:get(config, State), <<"cgroup">>) end,
         <<"handoff_enabled">> => maps:get(handoff_limits, maps:get(config, State), undefined) =/= undefined,
         <<"deployment">> => ae_store:active_deployment(),
         <<"last_event_seq">> => ae_store:last_seq()},

@@ -1,7 +1,9 @@
 """Linux execution boundary owned by the controller, never by agent source.
 
-All untrusted execution requires BOTH namespace/seccomp isolation and verified
-cgroup v2 controllers. There is deliberately no rlimit-only fallback.
+All untrusted execution requires namespace/seccomp isolation. The explicitly
+selected process profile supports v0.1 hosts without delegated cgroups; it does
+not claim aggregate CPU, memory or process enforcement. The stronger cgroup
+profile verifies delegation and never automatically downgrades.
 """
 import argparse
 from contextlib import contextmanager
@@ -33,6 +35,36 @@ def validate_limits(limits):
     if set(limits) != LIMIT_KEYS or any(type(v) is not int or not 0 < v < 2**63 for v in limits.values()):
         raise Unavailable("sandbox_limits_required")
     return limits
+
+
+def validate_mode(mode):
+    if mode not in ("cgroup", "process"):
+        raise Unavailable("invalid_resource_limits_mode")
+    return mode
+
+
+class ProcessLimits:
+    """Namespace launcher cleanup plus inherited per-process prlimits only."""
+    def __enter__(self):
+        if platform.system() != "Linux" or platform.machine() != "x86_64":
+            raise Unavailable("unsupported_sandbox_platform")
+        self.child = None
+        return self
+
+    def enter_child(self):
+        pass
+
+    def cpu_used(self):
+        return 0  # Aggregate CPU accounting is unavailable in this profile.
+
+    def kill(self):
+        # Killing Bubblewrap tears down its PID namespace, including descendants
+        # that changed sessions. --die-with-parent also covers launcher loss.
+        if self.child is not None and self.child.poll() is None:
+            self.child.kill()
+
+    def __exit__(self, *_):
+        self.kill()
 
 
 def cgroup_filesystem(path):
@@ -198,16 +230,19 @@ def namespace_command(command, limits, policy, readonly=(), data_files=(), writa
     return args + list(command)
 
 
-def run(cgroup_root, limits, command, *, readonly=(), data_files=(), writable_tmp=(), watch_parent=False, cpu_budget_ms=None, deadline_ms=None):
-    """Run an opaque program only after the kernel resource boundary is ready."""
+def run(cgroup_root, limits, command, *, readonly=(), data_files=(), writable_tmp=(), watch_parent=False,
+        cpu_budget_ms=None, deadline_ms=None, resource_limits_mode="cgroup"):
+    """Run an opaque program with mandatory isolation and an explicit profile."""
     validate_limits(limits)
+    validate_mode(resource_limits_mode)
     if cpu_budget_ms is None:
         cpu_budget_ms = limits["cpu_seconds"] * 1000
     if type(cpu_budget_ms) is not int or not 0 < cpu_budget_ms <= limits["cpu_seconds"] * 1000:
         raise Unavailable("invalid_cpu_budget")
     if deadline_ms is not None and (type(deadline_ms) is not int or deadline_ms <= time.time_ns() // 1000000):
         raise Unavailable("sandbox_deadline_expired")
-    with Cgroup(cgroup_root, limits) as group, seccomp_policy() as policy:
+    boundary = Cgroup(cgroup_root, limits) if resource_limits_mode == "cgroup" else ProcessLimits()
+    with boundary as group, seccomp_policy() as policy:
         args = namespace_command(command, limits, policy, readonly, data_files, writable_tmp)
         descriptors = (policy,) + tuple(fd for fd, _ in data_files)
         with selectors.DefaultSelector() as selector:
@@ -220,6 +255,7 @@ def run(cgroup_root, limits, command, *, readonly=(), data_files=(), writable_tm
             with subprocess.Popen(args, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                     env={"PATH": "/usr/bin:/bin"}, close_fds=True, pass_fds=descriptors,
                     preexec_fn=group.enter_child) as child:
+                group.child = child
                 try:
                     selector.register(child.stdout, selectors.EVENT_READ, "output")
                     output = bytearray()
@@ -291,6 +327,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--cgroup-root", required=True, type=Path)
     parser.add_argument("--limits-json", required=True)
+    parser.add_argument("--resource-limits-mode", choices=("cgroup", "process"), default="cgroup")
     parser.add_argument("--probe", action="store_true")
     parser.add_argument("--runtime", type=Path)
     parser.add_argument("--digest")
@@ -302,10 +339,10 @@ def main():
     try:
         limits = validate_limits(json.loads(args.limits_json))
         if args.probe:
-            code, _, reason = run(args.cgroup_root, limits, ["/usr/bin/true"])
+            code, _, reason = run(args.cgroup_root, limits, ["/usr/bin/true"], resource_limits_mode=args.resource_limits_mode)
             if code or reason:
                 raise Unavailable(reason or "sandbox_probe_failed")
-            print(json.dumps({"available": True}))
+            print(json.dumps({"available": True, "resource_limits_mode": args.resource_limits_mode}))
             return
         if args.runtime is None or args.ipc_dir is None or args.token is None or args.digest is None:
             raise Unavailable("runtime_arguments_required")
@@ -313,7 +350,7 @@ def main():
             code, _, reason = run(args.cgroup_root, limits,
                 ["/usr/bin/escript", "/agent/seed", "/ipc/ipc", args.token],
                 readonly=[(args.ipc_dir, "/ipc")], data_files=[(release, "/agent/seed")], watch_parent=True,
-                cpu_budget_ms=args.cpu_budget_ms, deadline_ms=args.deadline_ms)
+                cpu_budget_ms=args.cpu_budget_ms, deadline_ms=args.deadline_ms, resource_limits_mode=args.resource_limits_mode)
         if code or reason:
             raise Unavailable(reason or "sandbox_runtime_failed")
     except (Unavailable, OSError, ValueError, subprocess.SubprocessError) as error:

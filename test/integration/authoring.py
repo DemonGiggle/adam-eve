@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Exercise seed authoring; optional delegated-cgroup cases build and evaluate patches."""
+"""Exercise seed authoring, isolated host builds/evaluation and promotion/rollback."""
 import difflib
 import json
 import os
@@ -89,6 +89,7 @@ class Provider(BaseHTTPRequestHandler):
 
 
 def main():
+    resource_mode = os.environ.get("AE_TEST_RESOURCE_LIMITS_MODE", "process")
     server = ThreadingHTTPServer(("127.0.0.1", 0), Provider)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     with tempfile.TemporaryDirectory(prefix="ae-authoring-") as directory:
@@ -103,7 +104,7 @@ def main():
             "processes": 32, "disk_reserve_bytes": 1048576}
         try:
             scenarios = ["success", "protected", "budget", "invalid", "missing-usage", "over-budget", "cache", "repair", "builder-unavailable"]
-            if os.environ.get("AE_TEST_CGROUP_ROOT"):
+            if resource_mode == "process" or os.environ.get("AE_TEST_CGROUP_ROOT"):
                 scenarios.extend(["builder-success", "evaluator-success", "evaluator-unavailable", "deployment-rollback", "orchestrated-rollback"])
             if os.environ.get("AE_TEST_AUTHORING_SCENARIOS"):
                 scenarios = os.environ["AE_TEST_AUTHORING_SCENARIOS"].split(",")
@@ -146,13 +147,20 @@ def main():
                         fake.mkdir()
                         wall_ms, cpu_ms = 5000, 1000
                     else:
-                        fake = Path(os.environ["AE_TEST_CGROUP_ROOT"])
+                        fake = Path(os.environ.get("AE_TEST_CGROUP_ROOT", "/sys/fs/cgroup"))
                     package = os.environ.get("AE_JSX_PACKAGE", str(Path.home() / ".cache/rebar3/hex/hexpm/packages/jsx-3.1.0.tar"))
                     extra_env["AE_BUILD_CONFIG_JSON"] = json.dumps({"cgroup_root": str(fake), "jsx_package": package,
+                        "resource_limits_mode": "cgroup" if scenario == "builder-unavailable" else resource_mode,
                         "source_bytes": 2097152, "source_files": 128, "artifact_bytes": 8388608,
                         "sandbox_limits": {"memory_bytes": 536870912, "pids": 32, "cpu_percent": 100,
                             "cpu_seconds": (cpu_ms + 999) // 1000, "address_space_bytes": 1073741824, "file_bytes": 33554432,
                             "open_files": 128, "output_bytes": 16777216, "wall_ms": wall_ms}})
+                    if scenario != "builder-unavailable":
+                        runtime_limits = json.loads(extra_env["AE_BUILD_CONFIG_JSON"])["sandbox_limits"]
+                        runtime_limits = {**runtime_limits, "pids": 64, "cpu_seconds": (policy["cpu_ms"] + 999) // 1000,
+                            "wall_ms": policy["total_ms"], "output_bytes": 65536}
+                        extra_env.update({"AE_RUNTIME_ISOLATION": "bubblewrap", "AE_RESOURCE_LIMITS_MODE": resource_mode,
+                            "AE_CGROUP_ROOT": str(fake), "AE_SANDBOX_LIMITS_JSON": json.dumps(runtime_limits)})
                 if scenario.startswith(("evaluator-", "deployment-", "orchestrated-")):
                     sys.path.insert(0, str(CHECKOUT / "test/evaluation"))
                     import test_evaluate
@@ -165,6 +173,7 @@ def main():
                         fake_evaluation = root / "fake-evaluation-cgroup"
                         fake_evaluation.mkdir()
                         evaluation["cgroup_root"] = str(fake_evaluation)
+                        evaluation["resource_limits_mode"] = "cgroup"
                     extra_env["AE_EVAL_CONFIG_JSON"] = json.dumps(evaluation)
                 if scenario in ("deployment-rollback", "orchestrated-rollback"):
                     extra_env.update({"AE_APPROVAL_TTL_MS": "120000", "AE_OBSERVE_MS": "60000",
@@ -178,7 +187,7 @@ def main():
                 assert result.returncode == 0, result.stdout + result.stderr
                 output = json.loads(result.stdout.splitlines()[0])
                 assert output["conversation"]["ok"] == "conversation still works", output
-                assert Provider.conversation_requests == (4 if scenario in ("deployment-rollback", "orchestrated-rollback") else 2 if scenario.startswith("evaluator-") else 1)
+                assert Provider.conversation_requests == (4 if scenario in ("deployment-rollback", "orchestrated-rollback") else 2 if scenario.startswith("evaluator-") else 1), (scenario, Provider.conversation_requests)
                 assert output["status"]["evolution_enabled"] is False
                 job = output["job"]
                 assert job["reserved_tokens"] == job["llm_calls"] * policy["tokens_per_call"]
@@ -243,7 +252,7 @@ def main():
                 with sqlite3.connect(root / "state/agent.sqlite3") as database:
                     turns = database.execute("SELECT request_id,message,reply,status FROM turns").fetchall()
                 assert turns and all(message == "hello" and status == "completed" and reply ==
-                    ("authored:conversation still works" if request == "candidate-ack" else "conversation still works")
+                    ("authored:conversation still works" if request.startswith("candidate-ack-") else "conversation still works")
                     for request, message, reply, status in turns), turns
             print("Authoring integration passed: scoped source, budgeted patches/repairs, dedupe, denial and usable conversation; generated releases require an explicit test-operator approval.")
         finally:

@@ -10,8 +10,11 @@ explicit_policy_and_limits_test() ->
             <<"cpu_percent">> => 100, <<"cpu_seconds">> => 15, <<"address_space_bytes">> => 1073741824,
             <<"file_bytes">> => 33554432, <<"open_files">> => 128, <<"output_bytes">> => 1048576, <<"wall_ms">> => 180000}},
     ?assertEqual({ok, Config}, ae_evaluator:validate_config(Config)),
+    Host = Config#{<<"resource_limits_mode">> => <<"process">>},
+    ?assertEqual({ok, Host}, ae_evaluator:validate_config(Host)),
     [ ?assertEqual({error, evaluation_configuration_required}, ae_evaluator:validate_config(Bad)) || Bad <-
         [#{}, maps:remove(<<"turn_ms">>, Config), Config#{<<"cgroup_root">> := <<"relative">>},
+         Config#{<<"resource_limits_mode">> => <<"automatic-fallback">>},
          Config#{<<"policy">> := Policy#{<<"min_success_delta_ppm">> := 0}},
          Config#{<<"policy">> := Policy#{<<"cases">> := [hd(maps:get(<<"cases">>, Policy))]}},
          Config#{<<"policy">> := Policy#{<<"mock_input_tokens">> := true}}]],

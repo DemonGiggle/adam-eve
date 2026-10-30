@@ -153,7 +153,8 @@ fixing the cause. Runtime failures are audited.
 | `AE_HEALTH_INTERVAL_MS` | required for handoff | Staged/active probe interval |
 | `AE_QUIESCE_TIMEOUT_MS` | required for handoff | In-flight turn drain deadline |
 | `AE_RUNTIME_ISOLATION` | `development` | Trusted manual seed or `bubblewrap` backend |
-| `AE_CGROUP_ROOT` | required for Bubblewrap | Delegated cgroup v2 subtree |
+| `AE_RESOURCE_LIMITS_MODE` | `cgroup` for compatibility | Select `process` for v0.1 host execution; `cgroup` for aggregate enforcement |
+| `AE_CGROUP_ROOT` | required for cgroup profile | Delegated cgroup v2 subtree |
 | `AE_SANDBOX_LIMITS_JSON` | required for Bubblewrap | Explicit resource limits; see isolation guide |
 
 All conversation events remain durable even when only recent history is sent to
@@ -203,11 +204,14 @@ pending work behind closed admission, and replay committed replies after explici
 reconciliation. They also restore a snapshot taken during deployment observation.
 
 The default development backend runs trusted manual seeds as the controller's OS
-user. Generated candidates require the restricted Bubblewrap/cgroup backend;
+user. Generated candidates require the restricted Bubblewrap backend;
 the supervised builder uses that backend and retains releases for evaluation.
 Restricted build and runtime crash-recovery checks have passed in a disposable
 Linux VM with cgroup delegation. A generated-candidate promotion/crash/rollback
-also preserves acknowledged work under that backend. An orchestrated variant
+also preserves acknowledged work under that backend. The explicit process
+profile now runs builds, independent evaluation, recovery and generated
+promotion/rollback directly on the host; complete aggregate resource enforcement
+is deferred to v0.2. An orchestrated variant
 repairs a real compiler failure, reaches explicit approval, and verifies persistent
 disable/re-enable across restart. Successive live-LLM-authored generations,
 the full restricted failure matrix, retention cleanup, and off-host recovery

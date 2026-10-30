@@ -98,8 +98,9 @@ reason(Reason) when is_binary(Reason) -> Reason.
 
 validate_config(Config) when is_map(Config) ->
     try
-        true = lists:sort(maps:keys(Config)) =:= lists:sort([<<"cgroup_root">>, <<"jsx_package">>,
+        true = lists:sort(maps:keys(maps:remove(<<"resource_limits_mode">>, Config))) =:= lists:sort([<<"cgroup_root">>, <<"jsx_package">>,
             <<"source_bytes">>, <<"source_files">>, <<"artifact_bytes">>, <<"sandbox_limits">>]),
+        true = lists:member(maps:get(<<"resource_limits_mode">>, Config, <<"cgroup">>), [<<"cgroup">>, <<"process">>]),
         true = lists:all(fun(K) -> V = maps:get(K, Config), is_integer(V) andalso V > 0 andalso V < (1 bsl 63) end,
             [<<"source_bytes">>, <<"source_files">>, <<"artifact_bytes">>]),
         true = lists:all(fun(K) -> V = maps:get(K, Config), is_binary(V) andalso filename:pathtype(V) =:= absolute end,

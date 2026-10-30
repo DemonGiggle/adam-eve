@@ -1,4 +1,4 @@
-"""Actual restricted seed recovery, requiring an explicitly delegated test root."""
+"""Actual restricted seed recovery on the host or optional delegated cgroups."""
 import json
 import os
 from pathlib import Path
@@ -9,7 +9,8 @@ import unittest
 CHECKOUT = Path(__file__).resolve().parents[2]
 
 
-@unittest.skipUnless(os.environ.get("AE_TEST_CGROUP_ROOT"), "requires explicitly delegated cgroup v2 test root")
+@unittest.skipUnless(os.getenv("AE_TEST_RESOURCE_LIMITS_MODE", "process") == "process" or os.getenv("AE_TEST_CGROUP_ROOT"),
+    "strict cgroup profile requires delegation")
 class RestrictedRuntimeTests(unittest.TestCase):
     def test_real_runtime_crash_recovery_and_checkpoint_restore(self):
         with tempfile.TemporaryDirectory(prefix="ae-restricted-runtime-") as directory:
@@ -21,7 +22,8 @@ class RestrictedRuntimeTests(unittest.TestCase):
             result = subprocess.run(["escript", str(CHECKOUT / "test/sandbox/restricted_runtime.escript")],
                 cwd=CHECKOUT, capture_output=True, text=True, timeout=180,
                 env={**os.environ, "AE_DATA_ROOT": directory, "AE_LLM_MODEL": "unused-no-provider-calls",
-                     "AE_RUNTIME_ISOLATION": "bubblewrap", "AE_CGROUP_ROOT": os.environ["AE_TEST_CGROUP_ROOT"],
+                     "AE_RUNTIME_ISOLATION": "bubblewrap", "AE_CGROUP_ROOT": os.environ.get("AE_TEST_CGROUP_ROOT", "/sys/fs/cgroup"),
+                     "AE_RESOURCE_LIMITS_MODE": os.environ.get("AE_TEST_RESOURCE_LIMITS_MODE", "process"),
                      "AE_SANDBOX_LIMITS_JSON": json.dumps(limits)})
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             self.assertIn("Restricted runtime recovery passed", result.stdout)

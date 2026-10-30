@@ -100,8 +100,11 @@ def validate_policy(policy):
 
 
 def validate_config(config):
-    require(exact(config, "cgroup_root source_bytes source_files artifact_bytes sandbox_limits startup_ms turn_ms policy"),
+    require(isinstance(config, dict), "evaluation_configuration_required")
+    require(exact({k: v for k, v in config.items() if k != "resource_limits_mode"},
+        "cgroup_root source_bytes source_files artifact_bytes sandbox_limits startup_ms turn_ms policy"),
             "evaluation_configuration_required")
+    sandbox.validate_mode(config.get("resource_limits_mode", "cgroup"))
     require(text(config["cgroup_root"], 4096) and Path(config["cgroup_root"]).is_absolute(), "invalid_evaluation_path")
     for key in ("source_bytes", "source_files", "artifact_bytes", "startup_ms", "turn_ms"):
         require(integer(config[key]), "invalid_evaluation_limit")
@@ -167,6 +170,7 @@ class Runtime:
             self.listener.listen(1)
             runtime = root / "artifacts" / manifest["digest"] / "seed"
             self.process = subprocess.Popen(["/usr/bin/python3", str(HERE / "ae_sandbox.py"),
+                "--resource-limits-mode", config.get("resource_limits_mode", "cgroup"),
                 "--cgroup-root", config["cgroup_root"], "--limits-json", json.dumps(limits),
                 "--runtime", str(runtime), "--digest", manifest["digest"], "--ipc-dir", str(self.directory),
                 "--token", self.token, "--cpu-budget-ms", str(cpu_ms)],
@@ -404,7 +408,8 @@ def evaluate(root, job, lease, config, *, watch_parent=False, configuration_hash
             code, output, reason = sandbox.run(config["cgroup_root"], limits,
                 ["/usr/bin/escript", "/judge/tests", str(policy["min_agent_test_modules"])],
                 readonly=[(source, "/source")], data_files=[(release, "/agent/seed"), (recipe, "/judge/tests")],
-                writable_tmp=["/work"], watch_parent=watch_parent, cpu_budget_ms=cpu_ms)
+                writable_tmp=["/work"], watch_parent=watch_parent, cpu_budget_ms=cpu_ms,
+                resource_limits_mode=config.get("resource_limits_mode", "cgroup"))
             gates["candidate_tests"] = code == 0 and reason is None and b"AE_TESTS_V1 " in output
         measurements, retained = [], []
         for manifest, gate in ((base, "baseline_contract"), (proposed, "candidate_contract")):

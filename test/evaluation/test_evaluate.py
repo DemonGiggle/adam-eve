@@ -135,7 +135,8 @@ class JudgeTests(unittest.TestCase):
         self.assertEqual(interval[1], 1000000)
 
 
-@unittest.skipUnless(os.environ.get("AE_TEST_CGROUP_ROOT"), "requires explicitly delegated cgroup v2 test root")
+@unittest.skipUnless(os.getenv("AE_TEST_RESOURCE_LIMITS_MODE", "process") == "process" or os.getenv("AE_TEST_CGROUP_ROOT"),
+    "strict cgroup profile requires delegation")
 class RestrictedEvaluationTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -172,7 +173,7 @@ class RestrictedEvaluationTests(unittest.TestCase):
         job = {**fixture.job, "status": "testing", "built_artifact": proposed,
             "deadline": time.time_ns()//1000000 + wall * 3,
             "limits": {**fixture.job["limits"], "evaluation_ms": wall, "cpu_ms": cpu * 3}}
-        config = {k: fixture.config[k] for k in ("cgroup_root", "source_bytes", "source_files", "artifact_bytes")}
+        config = {k: fixture.config[k] for k in ("cgroup_root", "source_bytes", "source_files", "artifact_bytes", "resource_limits_mode")}
         config.update({"startup_ms": 30000, "turn_ms": 15000, "policy": policy(),
             "sandbox_limits": {**fixture.config["sandbox_limits"], "wall_ms": wall, "cpu_seconds": (cpu+3999)//4000}})
         for prefix, expected in (("authored:", True), ("", False)):
@@ -208,9 +209,10 @@ class RestrictedEvaluationTests(unittest.TestCase):
                 recipe = judge.HERE / "test_seed.escript"
                 with judge.sandbox.sealed_release(root / "artifacts" / base["digest"] / "seed", base["digest"], 8388608) as release, \
                         judge.sandbox.sealed_release(recipe, judge.hashlib.sha256(recipe.read_bytes()).hexdigest(), 1048576) as script:
-                    code, output, reason = judge.sandbox.run(os.environ["AE_TEST_CGROUP_ROOT"], config,
+                    code, output, reason = judge.sandbox.run(os.environ.get("AE_TEST_CGROUP_ROOT", "/sys/fs/cgroup"), config,
                         ["/usr/bin/escript", "/judge/tests", "1"], readonly=[(source, "/source")],
-                        data_files=[(release, "/agent/seed"), (script, "/judge/tests")], writable_tmp=["/work"])
+                        data_files=[(release, "/agent/seed"), (script, "/judge/tests")], writable_tmp=["/work"],
+                        resource_limits_mode=os.getenv("AE_TEST_RESOURCE_LIMITS_MODE", "process"))
                     self.assertNotEqual(code, 0)
                     self.assertIsNone(reason)
                     self.assertIn(marker, output)

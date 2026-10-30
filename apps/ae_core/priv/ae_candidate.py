@@ -111,8 +111,9 @@ def git(root, *arguments, index=None, data=None, cap=1048576, extra_env=None):
 
 
 def validate_config(config):
-    require(set(config) == {"cgroup_root", "jsx_package", "source_bytes", "source_files", "artifact_bytes", "sandbox_limits"},
+    require(set(config) - {"resource_limits_mode"} == {"cgroup_root", "jsx_package", "source_bytes", "source_files", "artifact_bytes", "sandbox_limits"},
             "build_configuration_required")
+    sandbox.validate_mode(config.get("resource_limits_mode", "cgroup"))
     for name in ("source_bytes", "source_files", "artifact_bytes"):
         require(type(config[name]) is int and 0 < config[name] < 2**63, "invalid_build_limit")
     for name in ("cgroup_root", "jsx_package"):
@@ -310,7 +311,8 @@ def build(root, job, proposal, lease, config, *, watch_parent=False):
                  recipe_hash, "-"],
                 readonly=[(source, "/source"), (dependency, "/dependency")],
                 data_files=[(recipe, "/recipe/build_seed.escript")],
-                cpu_budget_ms=min(lease["cpu_ms"], limits["cpu_seconds"] * 1000), watch_parent=watch_parent)
+                cpu_budget_ms=min(lease["cpu_ms"], limits["cpu_seconds"] * 1000), watch_parent=watch_parent,
+                resource_limits_mode=config.get("resource_limits_mode", "cgroup"))
         if code or reason:
             raise BuildError(reason or "compilation_failed", diagnostics(output, job["limits"]["max_diagnostic_bytes"]))
         try:
@@ -327,6 +329,7 @@ def build(root, job, proposal, lease, config, *, watch_parent=False):
             "authoring": "llm", "objective": job["objective"], "producing_job": job["id"],
             "producing_attempt": proposal["attempt"], "patch_hash": proposal["patch_hash"],
             "build_recipe": "ae_seed_v1", "build_provenance": {"recipe": "ae_seed_v1",
+                "resource_limits_mode": config.get("resource_limits_mode", "cgroup"),
                 "recipe_sha256": recipe_hash,
                 "dependency": {"name": "jsx", "version": "3.1.0", "package_sha256": inputs.PACKAGE_SHA256}},
             "evaluation": None}

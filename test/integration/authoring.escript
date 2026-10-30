@@ -93,21 +93,22 @@ deploy_and_rollback(Id) ->
     deploy_and_rollback(Id, Summary).
 deploy_and_rollback(Id, Summary) ->
     Base = ae_store:routing(),
+    Awaiting = <<"awaiting-approval-", Id/binary>>, Ack = <<"candidate-ack-", Id/binary>>,
     Id = maps:get(<<"evolution_job">>, Summary), DepId = maps:get(<<"deployment_id">>, Summary),
     {error, approval_mismatch} = ae_deployment:approve(DepId, <<"wrong-evaluation-approval">>),
     Base = ae_store:routing(),
-    {ok, <<"conversation still works">>} = ae_router:turn(<<"awaiting-approval">>, <<"test">>, <<"hello">>),
+    {ok, <<"conversation still works">>} = ae_router:turn(Awaiting, <<"test">>, <<"hello">>),
     {ok, Promoted} = ae_deployment:approve(DepId, maps:get(<<"approval_binding">>, Summary)),
     <<"eve">> = maps:get(<<"slot">>, Promoted),
-    {ok, <<"authored:conversation still works">>} = ae_router:turn(<<"candidate-ack">>, <<"test">>, <<"hello">>),
+    {ok, <<"authored:conversation still works">>} = ae_router:turn(Ack, <<"test">>, <<"hello">>),
     #{<<"os_pid">> := OsPid} = ae_router:status(),
     os:cmd("kill -9 " ++ integer_to_list(OsPid)),
     wait_rollback(Id, erlang:monotonic_time(millisecond) + 120000),
     Restored = ae_store:routing(), <<"adam">> = maps:get(<<"slot">>, Restored),
     true = maps:get(<<"epoch">>, Restored) > maps:get(<<"epoch">>, Promoted),
-    {ok, <<"authored:conversation still works">>} = ae_router:turn(<<"candidate-ack">>, <<"test">>, <<"hello">>),
+    {ok, <<"authored:conversation still works">>} = ae_router:turn(Ack, <<"test">>, <<"hello">>),
     [#{<<"text">> := <<"conversation still works">>}] = [Result || {_, <<"tool_result">>,
-        #{<<"request_id">> := <<"candidate-ack">>, <<"key">> := <<"llm">>, <<"result">> := Result}} <- ae_store:events()],
+        #{<<"request_id">> := RequestId, <<"key">> := <<"llm">>, <<"result">> := Result}} <- ae_store:events(), RequestId =:= Ack],
     {ok, #{<<"rolled_back">> => true, <<"acknowledged_reply_retained">> => true}}.
 wait_engine(Deadline) ->
     case ae_evolution:status() of

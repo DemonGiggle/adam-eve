@@ -29,8 +29,11 @@ CPU budget and the configured runtime CPU ceiling. The reservation survives
 restart and is never refunded. Memory/process limits are clamped to job limits;
 startup and the sandbox watchdog share the absolute lease deadline. Approval and
 observation cannot outlive that runtime lease. Promotion does not relax these
-limits: the same process retains its reserved lifetime quota, and any later
-ordinary recovery uses fresh runtime limits under a new epoch.
+limits: the same process retains its lease, and any later ordinary recovery uses
+fresh runtime limits under a new epoch. Aggregate lifetime CPU enforcement
+requires the cgroup profile; the v0.1 host process profile retains pessimistic
+reservations, per-process limits, and the absolute wall deadline without claiming
+aggregate CPU/memory/process enforcement.
 
 ## Operator commands and recovery
 
@@ -38,8 +41,11 @@ Enabling requires `AE_EVOLUTION_ENABLED=true`, complete
 `AE_EVOLUTION_LIMITS_JSON`, `AE_BUILD_CONFIG_JSON` ([BUILD.md](BUILD.md)),
 `AE_EVAL_CONFIG_JSON` ([EVALUATION.md](EVALUATION.md)), and all four handoff
 timeouts (`AE_APPROVAL_TTL_MS`, `AE_OBSERVE_MS`, `AE_HEALTH_INTERVAL_MS`,
-`AE_QUIESCE_TIMEOUT_MS`). The runtime must use Bubblewrap with delegated cgroups
-and explicit sandbox limits as documented in [ISOLATION.md](ISOLATION.md).
+`AE_QUIESCE_TIMEOUT_MS`). The runtime must use Bubblewrap and explicit sandbox
+limits as documented in [ISOLATION.md](ISOLATION.md). For v0.1 host execution,
+select `AE_RESOURCE_LIMITS_MODE=process` and `resource_limits_mode: process` in
+both builder/evaluator JSON configurations. Delegated cgroups are optional for
+the stronger profile and are no longer an MVP prerequisite.
 Missing or invalid evolution configuration leaves ordinary service available
 and makes a trigger return `evolution_disabled`; an operator enable request
 returns `evolution_not_configured`. There is no generated-code host fallback.
@@ -139,10 +145,10 @@ turn from invoking source tools by changing a tool name.
 Unix IPC, scoped Git source and a fixture HTTP provider. It verifies source
 pagination/ranges, structured patch submission, proposal/call deduplication,
 unknown-call denial, budget exhaustion, protected paths, prose-only rejection,
-required usage accounting, and continued conversation service. The accepted
-patch is data in the ledger in the native scenarios. With a delegated test
-cgroup root, optional scenarios execute restricted builds/evaluations and
-generated promotion/rollback. `orchestrated-rollback` uses the state machine to
+required usage accounting, and continued conversation service. The native suite
+also executes restricted host builds/evaluations and generated
+promotion/rollback with the process profile. `AE_TEST_RESOURCE_LIMITS_MODE=cgroup`
+and `AE_TEST_CGROUP_ROOT` select the stronger profile. `orchestrated-rollback` uses the state machine to
 repair a real compile failure, reach explicit approval, preserve acknowledged
 work through candidate crash/rollback, and verify persistent disable/re-enable
 across restart. Fixture authoring does not establish live-model authoring quality.

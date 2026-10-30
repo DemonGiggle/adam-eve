@@ -51,7 +51,7 @@ Only public build inputs are exported; controller code, Git metadata, private
 contract tests and credentials are not mounted in the compiler. Unexpected
 private files and symlinks cause rejection rather than being copied into it.
 
-Compilation uses the verified cgroup/namespace/seccomp backend with source and
+Compilation uses the namespace/seccomp backend and the explicitly selected resource profile, with source and
 the verified dependency mounted read-only. The exact controller recipe is
 hashed and sealed before mounting. The compiler emits bounded base64 release
 bytes through stdout; it receives no writable host output mount. The controller
@@ -90,6 +90,7 @@ the following are **local test budgets**, not production defaults:
 ```json
 {
   "cgroup_root": "/sys/fs/cgroup/owned-jobs",
+  "resource_limits_mode": "process",
   "jsx_package": "/private/cache/jsx-3.1.0.tar",
   "source_bytes": 2097152,
   "source_files": 128,
@@ -108,8 +109,9 @@ the following are **local test budgets**, not production defaults:
 }
 ```
 
-Effective CPU/memory/process/time bounds cannot exceed the durable job/lease
-limits. The cgroup watchdog also enforces fractional-second aggregate CPU
+Requested CPU/memory/process/time bounds cannot exceed the durable job/lease
+limits. The process profile applies per-process limits and the wall deadline;
+complete aggregate enforcement is deferred to v0.2. The optional cgroup watchdog also enforces fractional-second aggregate CPU
 budgets; polling and kernel scheduling impose watchdog granularity. Compiler
 failures return bounded public diagnostics, without raw Git/host errors. Scope
 violations terminate the job. Failed compilation can request a complete repair
@@ -128,11 +130,12 @@ or the independent Phase 2 quality gates.
 
 Candidate tests cover pinned exports/ancestry, deterministic attempt commits,
 zero-context patch checks, symlink/scope denial, mandatory execution leases,
-disk reserve and fail-closed isolation. Set `AE_TEST_CGROUP_ROOT` to exercise
-the successful restricted compilation and retained output. The authoring
-integration includes a supervised-build failure; with a delegated test root it
-also includes a successful author → build → testing transition and verifies
-that the unevaluated output cannot be deployed.
+disk reserve and fail-closed isolation. The default suite runs successful
+restricted host compilation and retained output with the process profile.
+The authoring integration includes a supervised-build failure, a successful
+author → build → testing transition, independent evaluation and generated
+promotion/rollback. Set `AE_TEST_RESOURCE_LIMITS_MODE=cgroup` together with
+`AE_TEST_CGROUP_ROOT` to repeat those checks with aggregate enforcement.
 
 The native development host lacks cgroup delegation. Separate checks in an
 unprivileged user session inside a disposable QEMU/Linux 6.12 VM verified all
@@ -143,5 +146,6 @@ ms build wall time and 90000 ms CPU. These are selected by
 `AE_TEST_BUILD_WALL_MS`/`AE_TEST_BUILD_CPU_MS`, not substituted for production
 budgets. A separate restricted-runtime test killed the launcher, verified fresh
 epochs and retained completed/unknown effects, then restarted from a checkpoint.
-Full restricted Adam/Eve handoff remains separate acceptance work. Evaluator
+The full Adam/Eve handoff suite also passes directly on the host with Bubblewrap
+and the process profile. Evaluator
 checks and their scope are documented separately in [EVALUATION.md](EVALUATION.md).

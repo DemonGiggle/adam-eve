@@ -1,7 +1,7 @@
 """Kernel boundary component checks and optional delegated-cgroup integration.
 
-The namespace-only checks execute fixed, trusted fixtures. Production run()
-always requires cgroups; these component tests do not enable a fallback mode.
+The host checks use the explicit process profile with namespace/seccomp
+isolation. Complete aggregate enforcement remains an optional cgroup suite.
 """
 import ctypes
 import errno
@@ -161,12 +161,52 @@ print(json.dumps({{"boundary": "ok"}}))
 
     @staticmethod
     def namespace(command, *, readonly=(), data_files=()):
-        # Fixed trusted probes only. Never call this instead of run() for a job.
-        with sandbox.seccomp_policy() as policy:
-            arguments = sandbox.namespace_command(command, LIMITS, policy, python_mounts() + list(readonly), data_files)
-            return subprocess.run(arguments, capture_output=True, timeout=10,
-                env={**os.environ, "AE_SECRET_CANARY": "host-only"},
-                pass_fds=(policy,) + tuple(fd for fd, _ in data_files))
+        code, output, reason = sandbox.run("/nonexistent-cgroup", LIMITS, command,
+            readonly=python_mounts() + list(readonly), data_files=data_files, resource_limits_mode="process")
+        if reason:
+            raise AssertionError(reason)
+        return subprocess.CompletedProcess(command, code, stdout=output, stderr=b"")
+
+    def test_host_timeout_kills_descendants_in_new_sessions(self):
+        with tempfile.TemporaryDirectory(prefix="ae-descendant-") as directory, socket.socket(socket.AF_UNIX) as listener:
+            root = Path(directory)
+            listener.bind(str(root / "ipc"))
+            listener.listen(1)
+            listener.settimeout(5)
+            peers = []
+
+            def receive_peer():
+                connection, _ = listener.accept()
+                with connection:
+                    import struct
+                    pid, _, _ = struct.unpack("3i", connection.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, 12))
+                    peers.append(os.pidfd_open(pid))
+
+            thread = threading.Thread(target=receive_peer)
+            thread.start()
+            program = '''
+import os, socket, time
+if os.fork() == 0:
+    os.setsid()
+    peer = socket.socket(socket.AF_UNIX)
+    peer.connect("/ipc/ipc")
+    time.sleep(30)
+else:
+    time.sleep(30)
+'''
+            try:
+                code, _, reason = sandbox.run("/nonexistent-cgroup", {**LIMITS, "wall_ms": 1000},
+                    ["/usr/bin/python3", "-c", program], readonly=python_mounts() + [(root, "/ipc")],
+                    resource_limits_mode="process")
+                thread.join(5)
+                self.assertEqual(reason, "sandbox_timeout")
+                self.assertNotEqual(code, 0)
+                self.assertEqual(len(peers), 1)
+                import select
+                self.assertEqual(select.select(peers, [], [], 5)[0], peers)
+            finally:
+                for descriptor in peers:
+                    os.close(descriptor)
 
 
 @unittest.skipUnless(os.getenv("AE_TEST_CGROUP_ROOT"), "requires an explicitly delegated cgroup v2 test root")

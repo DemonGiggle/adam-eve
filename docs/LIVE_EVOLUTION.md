@@ -6,13 +6,15 @@ source, executable releases, scorecards and explicit test-operator approvals.
 It does not use the fixture provider and is excluded from `scripts/test`.
 Model errors fail the demonstration; they are not replaced with canned patches.
 
-The host must satisfy [ISOLATION.md](ISOLATION.md), including delegated cgroup
-CPU/memory/process controllers. Build the controller with `scripts/build` and
+The host must satisfy the namespace/seccomp requirements in
+[ISOLATION.md](ISOLATION.md). Complete aggregate resource enforcement is deferred
+to v0.2; the v0.1 process profile needs neither delegated cgroups nor a VM.
+Build the controller with `scripts/build` and
 install the chosen model in a local Ollama instance. Set:
 
 ```sh
 export AE_RUNTIME_ISOLATION=bubblewrap
-export AE_CGROUP_ROOT=/absolute/path/to/delegated/jobs
+export AE_RESOURCE_LIMITS_MODE=process
 export AE_RUNTIME_START_TIMEOUT_MS=30000
 export AE_LIVE_LLM_MODEL=your-installed-model
 export AE_LIVE_LLM_URL=http://127.0.0.1:11434/api/chat

@@ -1,4 +1,4 @@
-"""Candidate preparation never runs source; production compilation requires cgroups."""
+"""Candidate preparation never runs source; compilation requires OS isolation."""
 import copy
 import difflib
 import hashlib
@@ -59,6 +59,7 @@ class CandidateTests(unittest.TestCase):
             "epoch": 1, "patch": patch, "patch_hash": hashlib.sha256(patch.encode()).hexdigest(), "paths": [path]}
         package = os.environ.get("AE_JSX_PACKAGE", str(Path.home() / ".cache/rebar3/hex/hexpm/packages/jsx-3.1.0.tar"))
         self.config = {"cgroup_root": os.environ.get("AE_TEST_CGROUP_ROOT", "/sys/fs/cgroup"),
+            "resource_limits_mode": os.environ.get("AE_TEST_RESOURCE_LIMITS_MODE", "process"),
             "jsx_package": package, "source_bytes": 2097152, "source_files": 128, "artifact_bytes": 8388608,
             "sandbox_limits": {"memory_bytes": 536870912, "pids": 64, "cpu_percent": 100, "cpu_seconds": (cpu_ms + 999) // 1000,
                 "address_space_bytes": 1073741824, "file_bytes": 33554432, "open_files": 128,
@@ -108,7 +109,8 @@ class CandidateTests(unittest.TestCase):
         fake.mkdir()
         before = set((self.root / "artifacts").iterdir())
         with self.assertRaisesRegex(sandbox.Unavailable, "cgroup_v2_required"):
-            candidate.build(self.root, self.job, self.proposal, self.lease, {**self.config, "cgroup_root": str(fake)})
+            candidate.build(self.root, self.job, self.proposal, self.lease,
+                {**self.config, "cgroup_root": str(fake), "resource_limits_mode": "cgroup"})
         self.assertEqual(set((self.root / "artifacts").iterdir()), before)
         self.assertEqual(list((self.root / "workspaces").iterdir()), [])
 
@@ -206,11 +208,13 @@ class CandidateTests(unittest.TestCase):
                 with self.assertRaisesRegex(candidate.BuildError, "artifact_conflict"):
                     candidate.publish(self.root, executable, {**manifest, "objective": "changed"}, self.job)
 
-    @unittest.skipUnless(os.getenv("AE_TEST_CGROUP_ROOT"), "requires explicitly delegated cgroup v2 test root")
+    @unittest.skipUnless(os.getenv("AE_TEST_RESOURCE_LIMITS_MODE", "process") == "process" or os.getenv("AE_TEST_CGROUP_ROOT"),
+        "strict cgroup profile requires delegation")
     def test_restricted_build_retains_exact_release_and_provenance(self):
         manifest = candidate.build(self.root, self.job, self.proposal, self.lease, self.config)
         self.assertEqual(manifest["authoring"], "llm")
         self.assertIsNone(manifest["evaluation"])
+        self.assertEqual(manifest["build_provenance"]["resource_limits_mode"], self.config["resource_limits_mode"])
         artifact = self.root / "artifacts" / manifest["digest"]
         self.assertEqual(hashlib.sha256((artifact / "seed").read_bytes()).hexdigest(), manifest["digest"])
         self.assertEqual(json.loads((artifact / "manifest.json").read_bytes()), manifest)

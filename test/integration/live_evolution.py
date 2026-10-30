@@ -83,7 +83,8 @@ def main():
     root = args.data_root.absolute()
     assert not root.exists(), "demonstration requires a new identity"
     assert os.environ.get("AE_RUNTIME_ISOLATION") == "bubblewrap"
-    cgroup = os.environ["AE_CGROUP_ROOT"]
+    cgroup = os.environ.get("AE_CGROUP_ROOT", "/sys/fs/cgroup")
+    resource_mode = os.environ.get("AE_RESOURCE_LIMITS_MODE", "process")
     model = os.environ["AE_LIVE_LLM_MODEL"]
     assert model != "fixture"
     model_digest = os.environ["AE_LIVE_MODEL_DIGEST"]
@@ -93,7 +94,7 @@ def main():
     sandbox = {"memory_bytes": 536870912, "pids": 64, "cpu_percent": 100, "cpu_seconds": 90,
         "address_space_bytes": 1073741824, "file_bytes": 33554432, "open_files": 128,
         "output_bytes": 16777216, "wall_ms": 180000}
-    builder = {"cgroup_root": cgroup, "jsx_package": package, "source_bytes": 2097152,
+    builder = {"cgroup_root": cgroup, "resource_limits_mode": resource_mode, "jsx_package": package, "source_bytes": 2097152,
         "source_files": 128, "artifact_bytes": 8388608, "sandbox_limits": sandbox}
     limits = {"max_attempts": 3, "total_ms": 2100000, "max_llm_calls": 16,
         "tokens_per_call": 32768, "max_tokens": 524288, "cost_per_call_microunits": 0,
@@ -102,12 +103,14 @@ def main():
         "build_ms": 180000, "evaluation_ms": 600000, "cpu_ms": 1200000,
         "memory_bytes": 536870912, "processes": 64, "disk_reserve_bytes": 16777216}
     settings = {"AE_LLM_MODEL": model, "AE_LLM_URL": url, "AE_LLM_TIMEOUT_MS": "300000",
+        "AE_RESOURCE_LIMITS_MODE": resource_mode,
         "AE_EVOLUTION_ENABLED": "true", "AE_EVOLUTION_LIMITS_JSON": json.dumps(limits),
         "AE_BUILD_CONFIG_JSON": json.dumps(builder), "AE_APPROVAL_TTL_MS": "120000",
         "AE_OBSERVE_MS": "10000", "AE_HEALTH_INTERVAL_MS": "250", "AE_QUIESCE_TIMEOUT_MS": "5000"}
     subprocess.run([str(CHECKOUT / "scripts/publish_seed"), "--data-root", str(root)], check=True)
     baseline = json.loads((root / "bootstrap.json").read_bytes())
     evidence = {"model": model, "model_digest": model_digest,
+        "resource_limits_mode": resource_mode,
         "controller_revision": os.environ.get("AE_LIVE_CONTROLLER_REVISION"),
         "baseline": baseline, "generations": []}
     persist(root, "live-demonstration.json", evidence)

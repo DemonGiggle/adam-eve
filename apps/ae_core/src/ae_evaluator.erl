@@ -98,8 +98,9 @@ reason(Reason) when is_binary(Reason) -> Reason.
 
 validate_config(Config) ->
     try
-        true = exact(Config, [<<"cgroup_root">>, <<"source_bytes">>, <<"source_files">>, <<"artifact_bytes">>,
+        true = exact(maps:remove(<<"resource_limits_mode">>, Config), [<<"cgroup_root">>, <<"source_bytes">>, <<"source_files">>, <<"artifact_bytes">>,
             <<"sandbox_limits">>, <<"startup_ms">>, <<"turn_ms">>, <<"policy">>]),
+        true = lists:member(maps:get(<<"resource_limits_mode">>, Config, <<"cgroup">>), [<<"cgroup">>, <<"process">>]),
         true = text(maps:get(<<"cgroup_root">>, Config), 4096),
         absolute = filename:pathtype(maps:get(<<"cgroup_root">>, Config)),
         true = lists:all(fun(K) -> bounded(maps:get(K, Config), 1, (1 bsl 63) - 1) end,

@@ -2,9 +2,11 @@
 
 The controller has an optional Linux x86_64 Bubblewrap backend. The trusted
 launcher is `apps/ae_core/priv/ae_sandbox.py`, outside evolvable agent source.
-It requires Bubblewrap, libseccomp, Python 3, prlimit, and a **delegated cgroup v2
-subtree with CPU, memory, and PID controllers enabled**. It never falls back to
-an unrestricted process or to per-process limits alone.
+It requires Bubblewrap, libseccomp, Python 3, and prlimit. The explicit `process`
+resource profile runs on a namespace-capable host without delegated cgroups.
+Complete aggregate CPU/memory/process enforcement is deferred to v0.2. The
+optional `cgroup` profile requires a delegated cgroup v2 subtree and fails closed
+when unavailable; there is no automatic profile downgrade or unrestricted fallback.
 
 The existing `development` backend is retained only for explicitly trusted,
 manually built seeds/artifacts. It refuses artifacts whose `authoring` is not
@@ -24,12 +26,14 @@ The restricted backend:
 - Installs seccomp rules blocking namespace creation and mounting, cgroup
   remounts, cross-process inspection, keyring access, BPF, io_uring, and other
   privileged kernel operations. Normal BEAM threads remain supported.
-- Places the launcher child in a private cgroup before executing any agent
+- In the `cgroup` profile, places the launcher child in a private cgroup before executing any agent
   code. It writes and reads back memory/swap, CPU rate, PID, and OOM-group
   controls. It requires `cgroup.kill` for complete descendant cleanup.
-- Adds hard address-space, CPU, file-size, descriptor, and per-user task limits;
-  supervises total cgroup CPU use, elapsed time, output size, and controller EOF.
-  Teardown kills the complete cgroup and removes its directory.
+- Adds per-process address-space, CPU, file-size, descriptor, and per-user task
+  limits in both profiles; supervises elapsed time, output size, and controller
+  EOF. The process profile kills Bubblewrap to tear down its PID namespace and
+  descendants, including processes that changed sessions. The cgroup profile
+  additionally supervises aggregate CPU and kills/removes the complete cgroup.
 - Removes inherited environment variables and file descriptors. Child output
   is captured and bounded; only a fixed status reaches the controller VM.
 
@@ -45,7 +49,7 @@ Set these before starting the controller:
 
 ```text
 AE_RUNTIME_ISOLATION=bubblewrap
-AE_CGROUP_ROOT=<absolute path to an operator-delegated empty cgroup subtree>
+AE_RESOURCE_LIMITS_MODE=process
 AE_SANDBOX_LIMITS_JSON=<JSON object containing every key below>
 ```
 
@@ -53,10 +57,10 @@ All values in the limits object must be explicit positive integers:
 
 | Key | Enforcement |
 |---|---|
-| `memory_bytes` | Aggregate cgroup memory ceiling; swap is disabled |
-| `pids` | Cgroup tasks ceiling and inherited task rlimit |
-| `cpu_percent` | Aggregate CPU quota; 100 is one CPU |
-| `cpu_seconds` | Total CPU watchdog and inherited process CPU rlimit |
+| `memory_bytes` | Requested memory budget; aggregate enforcement and swap disabling require `cgroup` |
+| `pids` | Inherited task rlimit; aggregate tasks ceiling requires `cgroup` |
+| `cpu_percent` | Requested aggregate CPU quota; enforced only in `cgroup`; 100 is one CPU |
+| `cpu_seconds` | Per-process CPU rlimit; aggregate CPU watchdog additionally requires `cgroup` |
 | `address_space_bytes` | Per-process virtual address-space rlimit |
 | `file_bytes` | Per-file size rlimit and maximum release bytes |
 | `open_files` | Per-process descriptor rlimit |
@@ -72,17 +76,29 @@ A watchdog expiry is a runtime failure and uses the existing fenced recovery
 path. A selected sandbox that cannot start leaves the controller degraded; it
 does not silently select the development backend.
 
+For aggregate enforcement, explicitly select `AE_RESOURCE_LIMITS_MODE=cgroup`
+and set `AE_CGROUP_ROOT` to an absolute delegated subtree with CPU, memory and
+PID controllers enabled. `cgroup` remains the default for older configurations
+that omit the mode. For builder/evaluator JSON configurations, select the same
+profile with `"resource_limits_mode":"process"` or `"cgroup"`; omitted values
+also retain the older strict behavior. Their `cgroup_root` path is unused by the
+process profile. Controller status reports its runtime profile, generated build
+provenance records the build profile, and the durable evaluation configuration
+binds the evaluator profile to its scorecard and approval.
+
 Probe the full backend with the same configured limits before use:
 
 ```sh
 python3 apps/ae_core/priv/ae_sandbox.py --probe \
-  --cgroup-root "$AE_CGROUP_ROOT" --limits-json "$AE_SANDBOX_LIMITS_JSON"
+  --resource-limits-mode "$AE_RESOURCE_LIMITS_MODE" \
+  --cgroup-root "${AE_CGROUP_ROOT:-/sys/fs/cgroup}" --limits-json "$AE_SANDBOX_LIMITS_JSON"
 ```
 
 The backend does not create administrator delegations or change ancestor cgroup
 controllers. A writable ordinary directory, a systemd unit accepting properties,
 or successful namespace creation is insufficient evidence of enforced resource
-limits. The probe checks the actual cgroup filesystem and kernel controls.
+limits. The cgroup-profile probe checks the actual filesystem and kernel
+controls; a successful process-profile probe does not establish aggregate limits.
 
 ## Verification and current limits
 
@@ -100,12 +116,11 @@ AE_TEST_CGROUP_ROOT="$AE_CGROUP_ROOT" python3 -m unittest discover -s test/sandb
 ```
 
 The current development host permits namespaces but does not delegate CPU,
-memory, or PID controllers. Five component tests pass here; three aggregate
-cgroup tests and a restricted-runtime recovery test require `AE_TEST_CGROUP_ROOT`.
-All nine sandbox tests passed as an unprivileged user inside a separate disposable
-QEMU/Linux 6.12 VM with real delegation. Restricted
-candidate compilation, the supervised build transition and restricted runtime
-crash/checkpoint recovery passed there as well; see [BUILD.md](BUILD.md). Full
-restricted Adam/Eve handoff remains separate verification work. Automatic evolution stays disabled
-until orchestration and independent quality gates are implemented. Backup/restore
-is described separately in [RECOVERY.md](RECOVERY.md).
+memory, or PID controllers. The default suite now runs process-profile isolation,
+session-escaping descendant teardown, sealed releases and actual restricted
+runtime crash/checkpoint recovery on that host. Build, independent evaluation,
+orchestrated generated promotion/rollback and the full manual Adam/Eve handoff
+suite also pass there. Aggregate cgroup checks remain optional v0.2 evidence;
+earlier runs passed inside a disposable VM with real delegation. No VM is needed
+for the v0.1 host profile. See [BUILD.md](BUILD.md) and [EVOLUTION.md](EVOLUTION.md).
+Backup/restore is described separately in [RECOVERY.md](RECOVERY.md).
