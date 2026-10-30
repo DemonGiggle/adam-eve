@@ -53,10 +53,13 @@ class Provider(BaseHTTPRequestHandler):
             elif step == 2:
                 assert len(last["entries"]) == 2 and last["eof"] is False
                 action = {"action": "source_read", "path": "apps/ae_seed/src/seed_agent.erl", "offset": 0, "bytes": 512}
+                if self.scenario == "full-source":
+                    read = next(schema for schema in actions if schema["properties"]["action"]["const"] == "source_read")
+                    action["bytes"] = read["properties"]["bytes"]["maximum"]
                 if self.scenario == "protected":
                     action["path"] = "apps/ae_core/src/ae_store.erl"
             elif step == 3:
-                assert "-module(seed_agent)." in last["content_utf8"] and last["eof"] is False
+                assert "-module(seed_agent)." in last["content_utf8"] and last["eof"] is (self.scenario == "full-source")
                 assert "job_id" in last and "base_source_revision" in last
                 patch = self.patch
                 if self.scenario == "orchestrated-rollback" and len(self.requests) == 3:
@@ -103,12 +106,12 @@ def main():
             "build_ms": 5000, "evaluation_ms": 5000, "cpu_ms": 5000, "memory_bytes": 536870912,
             "processes": 32, "disk_reserve_bytes": 1048576}
         try:
-            scenarios = ["success", "protected", "budget", "invalid", "missing-usage", "over-budget", "cache", "repair", "builder-unavailable"]
+            scenarios = ["success", "full-source", "protected", "budget", "invalid", "missing-usage", "over-budget", "cache", "repair", "builder-unavailable"]
             if resource_mode == "process" or os.environ.get("AE_TEST_CGROUP_ROOT"):
                 scenarios.extend(["builder-success", "evaluator-success", "evaluator-unavailable", "deployment-rollback", "orchestrated-rollback"])
             if os.environ.get("AE_TEST_AUTHORING_SCENARIOS"):
                 scenarios = os.environ["AE_TEST_AUTHORING_SCENARIOS"].split(",")
-                assert all(s in {"success", "protected", "budget", "invalid", "missing-usage", "over-budget", "cache", "repair", "builder-unavailable", "builder-success", "evaluator-success", "evaluator-unavailable", "deployment-rollback", "orchestrated-rollback"} for s in scenarios)
+                assert all(s in {"success", "full-source", "protected", "budget", "invalid", "missing-usage", "over-budget", "cache", "repair", "builder-unavailable", "builder-success", "evaluator-success", "evaluator-unavailable", "deployment-rollback", "orchestrated-rollback"} for s in scenarios)
             original_patch = Provider.patch
             for scenario in scenarios:
                 print("Authoring scenario: " + scenario, flush=True)
@@ -125,6 +128,8 @@ def main():
                     Provider.patch = f"diff --git a/{path} b/{path}\n" + "".join(difflib.unified_diff(
                         source.splitlines(True), changed.splitlines(True), fromfile="a/" + path, tofile="b/" + path))
                 policy = {**limits, "max_llm_calls": 1} if scenario == "budget" else limits
+                if scenario == "full-source":
+                    policy = {**limits, "source_page_bytes": 16384, "max_source_bytes": 65536}
                 if scenario in ("repair", "orchestrated-rollback"):
                     policy = {**limits, "max_llm_calls": 8, "max_tokens": 262144}
                 if scenario in ("builder-success", "evaluator-success", "evaluator-unavailable", "deployment-rollback", "orchestrated-rollback"):
@@ -192,7 +197,7 @@ def main():
                 job = output["job"]
                 assert job["reserved_tokens"] == job["llm_calls"] * policy["tokens_per_call"]
                 assert job["llm_calls"] <= policy["max_llm_calls"]
-                if scenario in ("success", "repair"):
+                if scenario in ("success", "full-source", "repair"):
                     assert "ok" in output["result"], output
                     assert output["result"]["ok"]["patch"] == Provider.patch
                     attempts = 2 if scenario == "repair" else 1

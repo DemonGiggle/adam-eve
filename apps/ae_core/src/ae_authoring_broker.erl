@@ -43,7 +43,8 @@ execute(<<"evolution_llm">>, #{<<"call_id">> := Call, <<"messages">> := Messages
         {ok, reserved} ->
             Remaining = maps:get(<<"deadline">>, Job) - erlang:system_time(millisecond),
             Timeout = max(1, min(Remaining, maps:get(llm_timeout, Config))),
-            Result = case ae_llm_ollama:complete_budgeted(Messages, Config#{llm_timeout := Timeout},
+            Result = case ae_llm_ollama:complete_budgeted(Messages, Config#{llm_timeout := Timeout,
+                    authoring_limits => maps:get(<<"limits">>, Job)},
                     maps:get(<<"tokens_per_call">>, maps:get(<<"limits">>, Job))) of
                 {ok, Value} -> Value;
                 {error, Reason} -> #{<<"error">> => atom_to_binary(Reason, utf8)}

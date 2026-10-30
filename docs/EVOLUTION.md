@@ -122,6 +122,8 @@ The authoring exchange and its RPC waits use the durable job deadline rather
 than an independent five-minute cap; every individual HTTP call remains bounded
 by the configured provider timeout. Source-read examples use the job's permitted
 page size to reduce unnecessary model round trips.
+The advertised raw read size accounts for JSON/base64 overhead, and the model's
+source-read schema is capped to that job-specific window.
 The authoring exchange has a request-count ceiling and a deadline even if a
 misbehaving seed continuously sends already-buffered messages. User turns are
 temporarily busy during authoring; health/status and recovery stay in the trusted

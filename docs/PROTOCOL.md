@@ -105,6 +105,11 @@ ID and `epoch` equal to the pinned active epoch. Every `args` map includes
 
 Source responses identify the pinned job/source and include `next_offset, eof`.
 Read bytes are `data_base64`; a strategy can decode valid UTF-8 before prompting.
+`source_page_bytes` bounds the encoded response, including metadata. A
+`source_read` request may ask for at most
+`floor((source_page_bytes - 512) * 3 / 4)` raw bytes. Use that raw window and
+`next_offset/eof` to page files; the authoring response schema advertises the
+job-specific ceiling.
 Unknown/protected paths never grant filesystem access. Protected requests reject
 the job. LLM messages contain only `role, content`, with at most 32 messages and
 256 KiB total JSON. They are authoring input, separate from conversation history.

@@ -12,7 +12,7 @@ complete_budgeted(Messages, Config, Tokens) when is_integer(Tokens), Tokens >= 2
     %% Accounting is mandatory for authoring, unlike the development chat path.
     Context = Tokens div 2, Output = Tokens - Context,
     case request(Messages, Config, #{<<"num_ctx">> => Context, <<"num_predict">> => Output, <<"temperature">> => 0},
-                 #{<<"format">> => authoring_schema()}) of
+                 #{<<"format">> => authoring_schema(Config)}) of
         {ok, Response} ->
             Prompt = maps:get(<<"prompt_eval_count">>, Response, undefined),
             Cached = maps:get(<<"prompt_eval_cached_count">>, Response, 0),
@@ -28,14 +28,17 @@ complete_budgeted(Messages, Config, Tokens) when is_integer(Tokens), Tokens >= 2
     end;
 complete_budgeted(_, _, _) -> {error, insufficient_token_reservation}.
 
-authoring_schema() ->
+authoring_schema(Config) ->
+    MaxRead = case maps:find(authoring_limits, Config) of
+        {ok, Limits} -> (maps:get(<<"source_page_bytes">>, Limits) - 512) * 3 div 4;
+        error -> 65536 end,
     String = #{<<"type">> => <<"string">>},
     Number = #{<<"type">> => <<"integer">>, <<"minimum">> => 0},
     Strings = #{<<"type">> => <<"array">>, <<"items">> => String},
     #{<<"oneOf">> => [
         action_schema(<<"source_list">>, #{<<"offset">> => Number, <<"count">> => Number#{<<"minimum">> := 1, <<"maximum">> => 32}}),
         action_schema(<<"source_read">>, #{<<"path">> => String, <<"offset">> => Number,
-            <<"bytes">> => Number#{<<"minimum">> := 1, <<"maximum">> => 65536}}),
+            <<"bytes">> => Number#{<<"minimum">> := 1, <<"maximum">> => MaxRead}}),
         action_schema(<<"proposal">>, #{<<"patch">> => String, <<"hypothesis">> => String,
             <<"expected_benefit">> => String, <<"risks">> => Strings, <<"requested_tests">> => Strings})]}.
 action_schema(Action, Properties) ->
