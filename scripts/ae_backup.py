@@ -24,6 +24,7 @@ TABLES = {"routing", "events", "turns", "tools", "tool_attempts", "artifacts",
           "checkpoints", "deployments", "control", "evolution_jobs",
           "evolution_proposals", "evolution_llm_calls"}
 MEMORY_TABLES = {"memory_versions", "memory_requests", "turn_memory"}
+SESSION_TABLES = {"sessions", "turn_settings"}
 POLICY_KEYS = {"schedule", "minimum_copies", "rpo_ms", "rto_ms", "failure_domain",
                "disk_reserve_bytes"}
 
@@ -204,11 +205,15 @@ def verify_state(root, point):
         require(not connection.execute("PRAGMA foreign_key_check").fetchall(), "SQLite reference failure")
         tables = {r[0] for r in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
         actual = tables - {"sqlite_sequence"}
-        require(actual in (TABLES, TABLES | MEMORY_TABLES), "unsupported state schema")
+        require(TABLES <= actual <= TABLES | MEMORY_TABLES | SESSION_TABLES, "unsupported state schema")
+        for group in (MEMORY_TABLES, SESSION_TABLES):
+            require(not actual & group or group <= actual, "incomplete state schema")
         route = json.loads(connection.execute("SELECT data FROM routing WHERE id=1").fetchone()[0])
         seq = connection.execute("SELECT COALESCE(MAX(seq),0) FROM events").fetchone()[0]
         require(route == point["routing"] and seq == point["event_seq"], "snapshot recovery point mismatch")
         memory_head = verify_memory(connection, seq) if MEMORY_TABLES <= actual else 0
+        if SESSION_TABLES <= actual:
+            verify_sessions(connection, seq)
         recovery = connection.execute("SELECT data FROM control WHERE name='restore'").fetchone()
         floor = max(route["epoch"], json.loads(recovery[0])["epoch_floor"] if recovery else 0)
         require(floor == point["epoch_floor"], "snapshot epoch floor mismatch")
@@ -245,6 +250,33 @@ def verify_state(root, point):
                         require(summary_revision <= revision and rows and rows[0][0:2] == ("summary", 0)
                             and rows[0][2] <= record["last_event_seq"], "checkpoint summary unavailable")
     return retained
+
+
+def verify_sessions(connection, event_seq):
+    marker = connection.execute("SELECT data FROM control WHERE name='session_pin_from_seq'").fetchone()
+    require(marker is not None, "missing session pin boundary")
+    first = json.loads(marker[0])
+    require(type(first) is int and 1 <= first <= event_seq + 1, "invalid session pin boundary")
+    fields = {"provider", "model", "thinking", "context_start"}
+    def validate(encoded):
+        data = json.loads(encoded)
+        require(isinstance(data, dict) and set(data) <= fields, "invalid session settings")
+        start = data.get("context_start", 0)
+        require(type(start) is int and 0 <= start <= event_seq, "invalid session context boundary")
+        for key in set(data) - {"context_start"}:
+            require(isinstance(data[key], str) and len(data[key].encode()) <= 256, "invalid provider selection")
+        if start:
+            row = connection.execute("SELECT kind FROM events WHERE seq=?", (start,)).fetchone()
+            require(row == ("session_context_reset",), "session reset event unavailable")
+        return start
+    for session, encoded in connection.execute("SELECT session_id,data FROM sessions"):
+        require(isinstance(session, str) and 0 < len(session.encode()) <= 256, "invalid session identity")
+        validate(encoded)
+    for request, encoded, user_seq in connection.execute(
+            "SELECT s.request_id,s.data,t.user_seq FROM turn_settings s JOIN turns t ON t.request_id=s.request_id"):
+        require(validate(encoded) <= user_seq, "turn context boundary is in the future")
+    missing = connection.execute("SELECT request_id FROM turns WHERE user_seq>=? AND request_id NOT IN (SELECT request_id FROM turn_settings)", (first,)).fetchall()
+    require(not missing, "turn provider/context pin unavailable")
 
 
 def verify_memory(connection, event_seq):

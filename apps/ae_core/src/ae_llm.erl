@@ -1,5 +1,5 @@
 -module(ae_llm).
--export([complete/2, complete_budgeted/3, profile/1, select/2, public/1, models/2, defaults/1, authoring_supported/1]).
+-export([complete/2, complete_budgeted/3, profile/1, select/2, public/1, models/2, defaults/1, authoring_supported/1, catalog/1]).
 
 profile(#{selected_provider := Selected}) -> Selected;
 profile(#{providers := Providers, default_provider := Name}) -> maps:get(Name, Providers);
@@ -11,6 +11,11 @@ profile(#{model := Model, url := Url}) ->
 defaults(Config) ->
     P = profile(Config), #{<<"provider">> => maps:get(name, P), <<"model">> => maps:get(model, P),
         <<"thinking">> => maps:get(thinking, P)}.
+
+catalog(Config) ->
+    Default = profile(Config), Profiles = maps:get(providers, Config, #{maps:get(name, Default) => Default}),
+    #{<<"default_provider">> => maps:get(name, Default), <<"providers">> => maps:map(fun(_, P) ->
+        #{<<"provider">> => maps:get(name, P), <<"model">> => maps:get(model, P), <<"thinking">> => maps:get(thinking, P)} end, Profiles)}.
 
 authoring_supported(Config) ->
     try
@@ -34,7 +39,7 @@ select(Selection, Config) ->
             {ok, Levels} when Thinking =/= <<>>, Thinking =/= <<"auto">> -> true = lists:member(Thinking, Levels);
             _ -> ok end,
         Selected = P#{model := Model, thinking := Thinking},
-        {ok, Config#{selected_provider => Selected, model := Model, url := maps:get(url, Selected)}}
+        {ok, Config#{selected_provider => Selected, model => Model, url => maps:get(url, Selected)}}
     catch _:_ -> {error, invalid_provider_selection} end.
 
 public(Config) ->

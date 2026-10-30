@@ -3,7 +3,8 @@
 
 messages(Request, #{context_turns := Limit}) ->
     case ae_store:context_snapshot(Request, Limit) of
-        #{<<"messages">> := Messages, <<"memory">> := Memory} ->
+        #{<<"messages">> := Messages, <<"memory">> := Stored, <<"session_id">> := Session} ->
+            Memory = scoped(Stored, ae_sessions:scope(Session)),
             History = fit(Messages),
             case maps:get(<<"entries">>, Memory) of
                 [] -> History;
@@ -14,6 +15,11 @@ messages(Request, #{context_turns := Limit}) ->
             end;
         Error -> Error
     end.
+
+scoped(Memory, undefined) -> Memory;
+scoped(#{<<"entries">> := Entries} = Memory, Prefix) ->
+    Memory#{<<"entries">> := [E || #{<<"key">> := Key} = E <- Entries,
+        binary:longest_common_prefix([Key, Prefix]) =:= byte_size(Prefix)]}.
 
 fit_memory(Memory, History) ->
     case byte_size(jsx:encode([Memory | History])) =< ae_protocol:max_bytes() - 4096 of

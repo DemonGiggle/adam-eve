@@ -287,7 +287,7 @@ safe_auth(Runtime) ->
     try {ok, ae_runtime_worker:auth(Runtime)} catch exit:_ -> {error, runtime_unavailable} end.
 
 admit_turn(Runtime, Auth, {Request, Session, Message}, From, State) ->
-    case ae_store:begin_turn(Auth, Request, Session, Message) of
+    case ae_store:begin_turn(Auth, Request, Session, Message, ae_llm:catalog(maps:get(config, State))) of
         {ok, {completed, Text}} -> {reply, {ok, Text}, State};
         {ok, pending} ->
             Parent = self(), Ref = make_ref(),

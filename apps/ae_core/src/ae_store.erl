@@ -1,7 +1,7 @@
 -module(ae_store).
 -behaviour(gen_server).
 -export([start_link/1, boot/1, routing/0, activate/2, authorized/1,
-         begin_turn/4, finish_turn/3, context/2, last_seq/0,
+         begin_turn/4, begin_turn/5, finish_turn/3, context/2, last_seq/0,
          reserve_tool/3, reserve_tool/4, finish_tool/4, retry_turn/1, cancel_turn/1, events/0]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
 -export([register_artifact/1, checkpoint/1, get_checkpoint/1, quiesce/2,
@@ -9,7 +9,7 @@
          preparing_promotion/2, starting_rollback/2,
          active_deployment/0, promote/4, rollback/5, complete/2, recover_handoff/0,
          activate_checkpoint/3, runtime_failed/2, evolution/1, recovery/0, verify_recovery/3]).
--export([memory/1, context_snapshot/2]).
+-export([memory/1, context_snapshot/2, session/1]).
 
 start_link(Root) -> gen_server:start_link({local, ?MODULE}, ?MODULE, Root, []).
 boot(Manifest) -> call({boot, Manifest}).
@@ -17,6 +17,7 @@ routing() -> call(routing).
 activate(Expected, Instance) -> call({activate, Expected, Instance}).
 authorized(Auth) -> call({authorized, Auth}).
 begin_turn(Auth, Request, Session, Message) -> call({begin_turn, Auth, Request, Session, Message}).
+begin_turn(Auth, Request, Session, Message, Catalog) -> call({begin_turn, Auth, Request, Session, Message, Catalog}).
 finish_turn(Auth, Request, Text) -> call({finish_turn, Auth, Request, Text}).
 context(Request, Limit) -> call({context, Request, Limit}).
 last_seq() -> call(last_seq).
@@ -48,6 +49,7 @@ activate_checkpoint(Expected, Descriptor, Checkpoint) -> call({activate_checkpoi
 runtime_failed(Expected, Reason) -> call({runtime_failed, Expected, Reason}).
 evolution(Operation) -> call({evolution, Operation}).
 memory(Operation) -> call({memory, Operation}).
+session(Operation) -> call({session, Operation}).
 context_snapshot(Request, Limit) -> call({context_snapshot, Request, Limit}).
 recovery() -> call(recovery).
 verify_recovery(Expected, BackupId, Origin) -> call({verify_recovery, Expected, BackupId, Origin}).
@@ -61,8 +63,10 @@ init(Root) ->
     _ = sql(Db, "PRAGMA synchronous=FULL", []),
     _ = sql(Db, "PRAGMA foreign_keys=ON", []),
     _ = sql(Db, "PRAGMA busy_timeout=5000", []),
-    lists:foreach(fun(Statement) -> sql(Db, Statement, []) end, schema() ++ ae_evolution_store:schema() ++ ae_memory:schema()),
+    lists:foreach(fun(Statement) -> sql(Db, Statement, []) end,
+        schema() ++ ae_evolution_store:schema() ++ ae_memory:schema() ++ ae_sessions:schema()),
     transaction(Db, fun() ->
+        ok = ae_sessions:initialize(Db),
         case route(Db) of
             undefined -> ok;
             Existing -> initialize_registry(Db, Existing)
@@ -80,10 +84,12 @@ terminate(_, Db) -> sqlite3:close(Db).
 
 dispatch({evolution, Operation}, Db) -> ae_evolution_store:dispatch(Db, Operation);
 dispatch({memory, Operation}, Db) -> ae_memory:dispatch(Db, Operation);
+dispatch({session, Operation}, Db) -> ae_sessions:dispatch(Db, Operation);
 dispatch({context_snapshot, Request, Limit}, Db) ->
     case dispatch({context, Request, Limit}, Db) of
         Messages when is_list(Messages) ->
-            #{<<"messages">> => Messages, <<"memory">> => ae_memory:context(Db, Request)};
+            {Session, _, _, _, _} = turn(Db, Request),
+            #{<<"messages">> => Messages, <<"memory">> => ae_memory:context(Db, Request), <<"session_id">> => Session};
         Error -> Error
     end;
 dispatch({boot, Manifest}, Db) ->
@@ -112,6 +118,8 @@ dispatch({activate, Expected, Instance}, Db) ->
     end;
 dispatch({authorized, Auth}, Db) -> admission_auth(Db, Auth);
 dispatch({begin_turn, Auth, Request, Session, Message}, Db) ->
+    dispatch({begin_turn, Auth, Request, Session, Message, #{}}, Db);
+dispatch({begin_turn, Auth, Request, Session, Message, Catalog}, Db) ->
     require_auth(Db, Auth),
     require_open(Db),
     case turn(Db, Request) of
@@ -123,6 +131,7 @@ dispatch({begin_turn, Auth, Request, Session, Message}, Db) ->
                     _ = sql(Db, "INSERT INTO turns VALUES(?,?,?,'pending',NULL,?)",
                         [Request, Session, Message, Seq]),
                     ok = ae_memory:dispatch(Db, {pin, Request}),
+                    ok = ae_sessions:pin(Db, Request, Session, Catalog),
                     {ok, pending};
                 _ -> {error, pending_turn}
             end;
@@ -145,9 +154,9 @@ dispatch({context, Request, Limit}, Db) ->
     case turn(Db, Request) of
         {Session, _, _, _, Seq} ->
             Turns = rows(Db, "SELECT message,reply FROM (SELECT message,reply,user_seq "
-                "FROM turns WHERE session_id=? AND user_seq<=? AND status!='cancelled' "
+                "FROM turns WHERE session_id=? AND user_seq<=? AND user_seq>=? AND status!='cancelled' "
                 "ORDER BY user_seq DESC LIMIT ?) "
-                "ORDER BY user_seq", [Session, Seq, Limit]),
+                "ORDER BY user_seq", [Session, Seq, ae_sessions:context_start(Db, Request), Limit]),
             lists:flatmap(fun({Message, Reply}) ->
                 User = #{<<"role">> => <<"user">>, <<"content">> => Message},
                 case Reply of

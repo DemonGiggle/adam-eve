@@ -47,6 +47,24 @@ than silently disappearing. Profile `models` metadata can declare exact
 Models are listed from the selected provider, not a fixed global model list.
 See [OpenAI's reasoning documentation](https://developers.openai.com/api/docs/guides/reasoning).
 
+## Durable chat settings
+
+The JSON CLI provides `providers`, `models {provider}`, `settings {session_id}`,
+`settings {session_id, field, value}` and `new {session_id}`. Settings fields are
+`provider`, `model`, `thinking` and `default`. Switching providers resets the
+model/thinking overrides to that profile's defaults; switching models clears the
+previous thinking override. `thinking: default` clears only that override.
+
+Every admitted turn pins its provider, model, thinking and context boundary in
+the same transaction as the user message. Later settings/reset commands affect
+future turns. Existing acknowledged replies replay without resolving credentials
+or calling a provider. `new` starts fresh context while retaining the audit and
+old replies. Backups include settings/pins and reject a missing required pin.
+Telegram settings are shared across a chat/group, with separate topic histories
+and topic-specific resets. Telegram context only injects memory keys under its
+`tg:<bot-id>:<chat-id>:` namespace; global CLI facts and other chats' memory are
+excluded.
+
 ## Authoring and spending
 
 `evolution_provider` (or `AE_EVOLUTION_PROVIDER`) chooses the authoring profile

@@ -36,6 +36,18 @@ command(#{<<"op">> := <<"turn">>, <<"request_id">> := Request,
         {error, Reason} -> #{<<"request_id">> => Request, <<"error">> => reason(Reason)}
     end;
 command(#{<<"op">> := <<"status">>}) -> ae_router:status();
+command(#{<<"op">> := <<"providers">>} = C) when map_size(C) =:= 1 ->
+    Config = application:get_env(ae_core, config, #{}), #{<<"providers">> => ae_settings:providers(Config)};
+command(#{<<"op">> := <<"models">>, <<"provider">> := Name} = C) when map_size(C) =:= 2 ->
+    case ae_llm:models(Name, application:get_env(ae_core, config, #{})) of
+        {ok, Models} -> #{<<"models">> => Models}; Error -> result(Error) end;
+command(#{<<"op">> := <<"settings">>, <<"session_id">> := Session} = C) when map_size(C) =:= 2 ->
+    case ae_settings:get(Session, application:get_env(ae_core, config, #{})) of {ok, Value} -> Value; Error -> result(Error) end;
+command(#{<<"op">> := <<"settings">>, <<"session_id">> := Session, <<"field">> := Field, <<"value">> := Value} = C)
+        when map_size(C) =:= 4 ->
+    case ae_settings:set(Session, Field, Value, application:get_env(ae_core, config, #{})) of {ok, V} -> V; Error -> result(Error) end;
+command(#{<<"op">> := <<"new">>, <<"session_id">> := Session} = C) when map_size(C) =:= 2 ->
+    case ae_store:session({reset, Session}) of {ok, _} -> result(ok); Error -> result(Error) end;
 command(#{<<"op">> := <<"memory_put">>, <<"origin_ref">> := Origin, <<"kind">> := Kind, <<"key">> := Key,
           <<"value">> := Value, <<"source_event_seqs">> := Sources, <<"expected_revision">> := Expected} = Command)
         when map_size(Command) =:= 7 -> memory_result({put, Origin, Kind, Key, Value, Sources, Expected});

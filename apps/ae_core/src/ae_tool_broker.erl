@@ -40,10 +40,12 @@ authorize({_, _, Epoch} = Auth, Request,
         Messages ->
             case ae_store:reserve_tool(Auth, Request, <<"llm">>, maps:get(max_llm_attempts, Config)) of
                 {ok, reserved} ->
-                    Result = case ae_llm:complete(Messages, Config) of
+                    Result = case ae_llm:select(ae_store:session({turn, Request}), Config) of
+                      {ok, Selected} -> case ae_llm:complete(Messages, Selected) of
                         {ok, Value} -> Value;
                         {error, Reason} -> #{<<"error">> => atom_to_binary(Reason, utf8)}
-                    end,
+                      end;
+                      {error, Reason} -> #{<<"error">> => atom_to_binary(Reason, utf8)} end,
                     ae_store:finish_tool(Auth, Request, <<"llm">>, Result);
                 {ok, {completed, Result}} -> {ok, Result};
                 {error, Reason} -> {ok, #{<<"error">> => atom_to_binary(Reason, utf8)}}
