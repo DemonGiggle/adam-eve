@@ -1,0 +1,35 @@
+{
+  "default_provider": "ollama",
+  "evolution_provider": "ollama",
+  "providers": {
+    "ollama": {
+      "adapter": "ollama",
+      "model": "your-installed-model",
+      "base_url": "http://127.0.0.1:11434",
+      "thinking": "auto"
+    },
+    "openai": {
+      "adapter": "openai",
+      "model": "your-api-model",
+      "api_key_env": "OPENAI_API_KEY",
+      "wire": "responses"
+    },
+    "opencode-go": {
+      "adapter": "opencode-go",
+      "model": "your-go-model",
+      "api_key_env": "OPENCODE_GO_API_KEY"
+    },
+    "chatgpt": {
+      "adapter": "chatgpt",
+      "model": "your-subscription-model",
+      "oauth_path": "/absolute/private/config/adam-eve/chatgpt-oauth.json"
+    }
+  },
+  "telegram": {
+    "enabled": false,
+    "token_env": "TELEGRAM_BOT_TOKEN",
+    "allowed_users": [],
+    "allowed_groups": [],
+    "admin_user_ids": []
+  }
+}

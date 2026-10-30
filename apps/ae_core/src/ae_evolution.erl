@@ -16,6 +16,7 @@ callback_mode() -> handle_event_function.
 configured(Config) ->
     try
         true = maps:get(evolution_requested, Config, false),
+        true = ae_llm:authoring_supported(Config),
         {ok, _} = ae_storage:validate_retention(maps:get(retention_policy, Config)),
         ModelTimeout = maps:get(evolution_llm_timeout, Config, maps:get(llm_timeout, Config, 30000)),
         true = is_integer(ModelTimeout) andalso ModelTimeout >= 100 andalso ModelTimeout =< 3600000,

@@ -57,13 +57,18 @@ action_schema(Action, Properties) ->
 
 content(#{<<"message">> := #{<<"content">> := Text}}) -> Text.
 
-request(Messages, #{url := Url, model := Model, llm_timeout := Timeout}, Options, Extra) ->
+request(Messages, #{url := Url, model := Model, llm_timeout := Timeout} = Config, Options, Extra) ->
+    Thinking = case maps:get(thinking, Config, <<>>) of
+        Level when Level =:= <<>>; Level =:= <<"auto">> -> #{};
+        <<"off">> -> #{<<"think">> => false};
+        <<"on">> -> #{<<"think">> => true};
+        Level -> #{<<"think">> => Level}
+    end,
     Body = jsx:encode(maps:merge(#{<<"model">> => Model, <<"messages">> => Messages,
-                        <<"stream">> => false, <<"options">> => Options}, Extra)),
-    case httpc:request(post, {Url, [], "application/json", Body},
-                       [{timeout, Timeout}, {connect_timeout, 3000}, {autoredirect, false}],
-                       [{body_format, binary}, {max_body_size, 1048576}, {max_header_size, 16384}]) of
-        {ok, {{_, 200, _}, _, Response}} when byte_size(Response) =< 1048576 ->
+                        <<"stream">> => false, <<"options">> => Options}, maps:merge(Thinking, Extra))),
+    case ae_llm_api:headers(ae_llm:profile(Config)) of
+      {ok, Headers} -> case ae_http:request(post, Url, Headers, Body, Timeout, 1048576) of
+        {ok, 200, Response} ->
             try jsx:decode(Response, [return_maps]) of
                 #{<<"done">> := true, <<"message">> := #{<<"content">> := Text}} = Decoded
                     when is_binary(Text), byte_size(Text) > 0, byte_size(Text) =< 65536 ->
@@ -72,4 +77,6 @@ request(Messages, #{url := Url, model := Model, llm_timeout := Timeout}, Options
             catch _:_ -> {error, invalid_provider_response} end;
         {ok, _} -> {error, provider_response_rejected};
         {error, _} -> {error, provider_unavailable}
+      end;
+      Error -> Error
     end.

@@ -40,7 +40,7 @@ authorize({_, _, Epoch} = Auth, Request,
         Messages ->
             case ae_store:reserve_tool(Auth, Request, <<"llm">>, maps:get(max_llm_attempts, Config)) of
                 {ok, reserved} ->
-                    Result = case ae_llm_ollama:complete(Messages, Config) of
+                    Result = case ae_llm:complete(Messages, Config) of
                         {ok, Value} -> Value;
                         {error, Reason} -> #{<<"error">> => atom_to_binary(Reason, utf8)}
                     end,
