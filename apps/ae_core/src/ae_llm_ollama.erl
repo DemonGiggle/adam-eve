@@ -39,6 +39,9 @@ authoring_schema(Config) ->
         action_schema(<<"source_list">>, #{<<"offset">> => Number, <<"count">> => Number#{<<"minimum">> := 1, <<"maximum">> => 32}}),
         action_schema(<<"source_read">>, #{<<"path">> => String, <<"offset">> => Number,
             <<"bytes">> => Number#{<<"minimum">> := 1, <<"maximum">> => MaxRead}}),
+        action_schema(<<"edit">>, #{<<"path">> => String, <<"old_text">> => String,
+            <<"new_text">> => String, <<"hypothesis">> => String, <<"expected_benefit">> => String,
+            <<"risks">> => Strings, <<"requested_tests">> => Strings}),
         action_schema(<<"proposal">>, #{<<"patch">> => String, <<"hypothesis">> => String,
             <<"expected_benefit">> => String, <<"risks">> => Strings, <<"requested_tests">> => Strings})]}.
 action_schema(Action, Properties) ->

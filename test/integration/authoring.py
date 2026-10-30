@@ -34,7 +34,7 @@ class Provider(BaseHTTPRequestHandler):
             assert body["options"]["temperature"] == 0
             actions = body["format"]["oneOf"]
             assert {action["properties"]["action"]["const"] for action in actions} == {
-                "source_list", "source_read", "proposal"}
+                "source_list", "source_read", "edit", "proposal"}
             assert all(action["additionalProperties"] is False and
                 set(action["required"]) == set(action["properties"]) for action in actions)
             last = body["messages"][-1]["content"]
@@ -53,13 +53,13 @@ class Provider(BaseHTTPRequestHandler):
             elif step == 2:
                 assert len(last["entries"]) == 2 and last["eof"] is False
                 action = {"action": "source_read", "path": "apps/ae_seed/src/seed_agent.erl", "offset": 0, "bytes": 512}
-                if self.scenario == "full-source":
+                if self.scenario in ("full-source", "deployment-rollback"):
                     read = next(schema for schema in actions if schema["properties"]["action"]["const"] == "source_read")
                     action["bytes"] = read["properties"]["bytes"]["maximum"]
                 if self.scenario == "protected":
                     action["path"] = "apps/ae_core/src/ae_store.erl"
             elif step == 3:
-                assert "-module(seed_agent)." in last["content_utf8"] and last["eof"] is (self.scenario == "full-source")
+                assert "-module(seed_agent)." in last["content_utf8"] and last["eof"] is (self.scenario in ("full-source", "deployment-rollback"))
                 assert "job_id" in last and "base_source_revision" in last
                 patch = self.patch
                 if self.scenario == "orchestrated-rollback" and len(self.requests) == 3:
@@ -69,6 +69,16 @@ class Provider(BaseHTTPRequestHandler):
                 action = {"action": "proposal", "patch": patch, "hypothesis": "clearer greeting",
                           "expected_benefit": "friendlier response", "risks": ["regression"],
                           "requested_tests": ["contract", "replay"]}
+                if self.scenario in ("deployment-rollback", "edit-paged"):
+                    action = self.edit_action()
+            elif step == 4 and self.scenario == "edit-paged":
+                assert last["edit_error"] == "edit_requires_complete_source_read"
+                read = next(schema for schema in actions if schema["properties"]["action"]["const"] == "source_read")
+                action = {"action": "source_read", "path": "apps/ae_seed/src/seed_agent.erl", "offset": 512,
+                    "bytes": read["properties"]["bytes"]["maximum"]}
+            elif step == 5 and self.scenario == "edit-paged":
+                assert last["offset"] == 512 and last["eof"] is True
+                action = self.edit_action()
             else:
                 raise AssertionError("unbounded authoring")
             content = json.dumps(action)
@@ -90,6 +100,14 @@ class Provider(BaseHTTPRequestHandler):
     def log_message(self, *_):
         pass
 
+    @staticmethod
+    def edit_action():
+        return {"action": "edit", "path": "apps/ae_seed/src/seed_agent.erl",
+            "old_text": '<<"text">> => Text, <<"event_refs">> => []',
+            "new_text": '<<"text">> => <<"authored:", Text/binary>>, <<"event_refs">> => []',
+            "hypothesis": "clearer greeting", "expected_benefit": "friendlier response",
+            "risks": ["regression"], "requested_tests": ["contract", "replay"]}
+
 
 def main():
     resource_mode = os.environ.get("AE_TEST_RESOURCE_LIMITS_MODE", "process")
@@ -106,12 +124,12 @@ def main():
             "build_ms": 5000, "evaluation_ms": 5000, "cpu_ms": 5000, "memory_bytes": 536870912,
             "processes": 32, "disk_reserve_bytes": 1048576}
         try:
-            scenarios = ["success", "full-source", "protected", "budget", "invalid", "missing-usage", "over-budget", "cache", "repair", "builder-unavailable"]
+            scenarios = ["success", "full-source", "edit-paged", "protected", "budget", "invalid", "missing-usage", "over-budget", "cache", "repair", "builder-unavailable"]
             if resource_mode == "process" or os.environ.get("AE_TEST_CGROUP_ROOT"):
                 scenarios.extend(["builder-success", "evaluator-success", "evaluator-unavailable", "deployment-rollback", "orchestrated-rollback"])
             if os.environ.get("AE_TEST_AUTHORING_SCENARIOS"):
                 scenarios = os.environ["AE_TEST_AUTHORING_SCENARIOS"].split(",")
-                assert all(s in {"success", "full-source", "protected", "budget", "invalid", "missing-usage", "over-budget", "cache", "repair", "builder-unavailable", "builder-success", "evaluator-success", "evaluator-unavailable", "deployment-rollback", "orchestrated-rollback"} for s in scenarios)
+                assert all(s in {"success", "full-source", "edit-paged", "protected", "budget", "invalid", "missing-usage", "over-budget", "cache", "repair", "builder-unavailable", "builder-success", "evaluator-success", "evaluator-unavailable", "deployment-rollback", "orchestrated-rollback"} for s in scenarios)
             original_patch = Provider.patch
             for scenario in scenarios:
                 print("Authoring scenario: " + scenario, flush=True)
@@ -143,6 +161,11 @@ def main():
                         "evaluation_ms": evaluation_wall, "cpu_ms": cpu_ms + evaluation_cpu * 2})
                 if scenario == "orchestrated-rollback":
                     policy.update({"max_llm_calls": 8, "max_tokens": 262144})
+                if scenario == "deployment-rollback":
+                    policy.update({"source_page_bytes": 16384, "max_source_bytes": 65536, "max_patch_bytes": 65536})
+                if scenario == "edit-paged":
+                    policy = {**limits, "source_page_bytes": 16384, "max_source_bytes": 65536,
+                        "max_patch_bytes": 65536, "max_llm_calls": 6, "max_tokens": 196608}
                 limit_file = root / "limits.json"
                 limit_file.write_text(json.dumps(policy))
                 extra_env = {"AE_RETENTION_POLICY_JSON": json.dumps({"promoted_generations": "all", "rejected_attempts": "all", "audit": "all"})}
@@ -197,12 +220,16 @@ def main():
                 job = output["job"]
                 assert job["reserved_tokens"] == job["llm_calls"] * policy["tokens_per_call"]
                 assert job["llm_calls"] <= policy["max_llm_calls"]
-                if scenario in ("success", "full-source", "repair"):
+                if scenario in ("success", "full-source", "repair", "edit-paged"):
                     assert "ok" in output["result"], output
-                    assert output["result"]["ok"]["patch"] == Provider.patch
+                    if scenario == "edit-paged":
+                        assert '+        <<"text">> => <<"authored:", Text/binary>>, <<"event_refs">> => []})' in output["result"]["ok"]["patch"]
+                    else:
+                        assert output["result"]["ok"]["patch"] == Provider.patch
                     attempts = 2 if scenario == "repair" else 1
                     assert output["duplicate_reused"] is True and job["status"] == "building" and job["attempts"] == attempts
-                    assert len(Provider.requests) == 3 * attempts and job["source_calls"] == 2 * attempts
+                    assert len(Provider.requests) == (5 if scenario == "edit-paged" else 3 * attempts)
+                    assert job["source_calls"] == (3 if scenario == "edit-paged" else 2 * attempts)
                 elif scenario == "cache":
                     assert output["result"]["ok"] == {"cached": True, "unknown_not_reissued": True}
                     assert len(Provider.requests) == 1 and job["llm_calls"] == 2

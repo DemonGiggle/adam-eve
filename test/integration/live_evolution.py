@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Opt-in real-Ollama, restricted-runtime Phase 2 acceptance demonstration.
 
-The caller explicitly supplies a local inference service, delegated cgroups,
+The caller explicitly supplies a local inference service, an isolation profile,
 and a new private data root. Outputs remain there for independent inspection.
 This is never part of the fixture-only default suite.
 """
@@ -134,7 +134,7 @@ def main():
                 "all remaining UTF-8 text. All other LLM text must be returned unchanged. Preserve all existing reply "
                 "formatting, conversation, memory and error behavior. Keep exactly the existing memory_read and llm "
                 "broker calls, protocol fields, capabilities and state schema. Read the complete seed_agent.erl and "
-                "the public protocol before proposing a minimal complete unified diff against this current baseline.")
+                "the public protocol, then prefer an exact-text edit against this current baseline.")
             job = controller.command("evolve", origin_ref=f"live-generation-{generation}", objective=objective)
             assert "id" in job, job
             identity = job["id"]

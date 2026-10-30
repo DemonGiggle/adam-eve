@@ -108,14 +108,25 @@ deployment approval, bound to that manifest. No job or agent request changes the
 manifest or creates a controller-authorized objective on its own.
 
 `seed_evolver` asks the broker for public job status, then asks the configured
-Ollama adapter for a JSON source-list/read action or a complete unified patch
-with structured rationale. Source reads support paginated paths and byte ranges;
+Ollama adapter for a JSON source-list/read action, an exact-text edit, or a complete
+unified patch with structured rationale. Source reads support paginated paths and byte ranges;
 the strategy keeps bounded recent authoring context instead of requiring the
 whole repository in one prompt. Proposal identities include the durable job and
 attempt number, and all repairs remain against the original pinned baseline.
 The first model request explicitly asks for source discovery before proposing.
+For an existing file, the preferred `edit` action supplies `path, old_text,
+new_text, hypothesis, expected_benefit, risks, requested_tests`. The model must
+supply one unique, nonempty exact match and its replacement. The agent caches
+contiguous source reads starting at offset zero within the job's source budget;
+only a complete file can be edited. It constructs a whole-file unified diff from
+those immutable bytes, including final-newline markers, and submits the ordinary
+proposal. Missing/incomplete source, ambiguous text and oversized patches return
+public feedback within the same call/deadline budget. Direct proposals remain
+available for multiple files, new files and edits exceeding the whole-file diff
+budget. The controller's path checks, Git application, build and independent
+evaluation are identical for both actions.
 The Ollama adapter supplies an exact JSON schema for source-list, source-read,
-and proposal actions, with required rationale fields and no extra properties;
+edit and proposal actions, with required rationale fields and no extra properties;
 authoring uses temperature zero. This follows Ollama's
 [structured output interface](https://docs.ollama.com/capabilities/structured-outputs).
 The agent and broker still validate actions, scope and budgets independently;
@@ -153,7 +164,8 @@ turn from invoking source tools by changing a tool name.
 
 `test/integration/authoring.py` exercises an actual published seed/BEAM runtime,
 Unix IPC, scoped Git source and a fixture HTTP provider. It verifies source
-pagination/ranges, structured patch submission, proposal/call deduplication,
+pagination/ranges, structured patch submission, complete-file edit assembly,
+incomplete-edit feedback and retry without a budget reset, proposal/call deduplication,
 unknown-call denial, budget exhaustion, protected paths, prose-only rejection,
 required usage accounting, and continued conversation service. The native suite
 also executes restricted host builds/evaluations and generated

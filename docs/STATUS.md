@@ -90,8 +90,12 @@ and cost reservations for authoring. There are no OpenAI or Anthropic adapters.
 Automated checks use a fixture provider rather than an installed live model.
 An opt-in real-model acceptance harness is documented in
 [LIVE_EVOLUTION.md](LIVE_EVOLUTION.md). A local Ollama preflight has succeeded;
-the initial live authoring attempt was cancelled for a malformed response before
-any build. Successful successive live-model generations remain unproven.
+live authoring attempts have reached source retrieval and proposal submission,
+but none has passed all gates. The latest malformed unified diff was rejected
+before building. Exact-text model edits now produce agent-assembled diffs from
+complete pinned source reads; host fixtures verify compilation, independent
+evaluation, explicit promotion and rollback through this path. Successful
+successive live-model generations remain unproven.
 
 Implementation details and test entry points are in [EVOLUTION.md](EVOLUTION.md),
 [BUILD.md](BUILD.md), [ISOLATION.md](ISOLATION.md), [MEMORY.md](MEMORY.md), and [RECOVERY.md](RECOVERY.md).
