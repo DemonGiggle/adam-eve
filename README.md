@@ -17,6 +17,19 @@ independent checks and explicit approval before promotion.
 - **Host execution** on Linux; complete aggregate resource enforcement is planned
   for v0.2.
 
+## Supported providers
+
+| Provider | Adapter | Setup |
+|---|---|---|
+| OpenAI and compatible APIs | `openai` | API key and model; custom endpoints supported |
+| Anthropic | `anthropic` | API key and model |
+| OpenCode Go | `opencode-go` | API key and model |
+| Ollama | `ollama` | Running Ollama server and installed model |
+
+See [LLM providers](docs/PROVIDERS.md) for endpoints, credentials, model
+selection, and thinking settings. Providers use Ollama or API keys; subscription
+login is not supported.
+
 ## Quick start
 
 On Linux, install Erlang/OTP 24+, rebar3, Git, Python 3, a C compiler, make,
@@ -25,15 +38,6 @@ and SQLite development headers. For example, on Ubuntu 22.04 or newer:
 ```sh
 sudo apt update
 sudo apt install erlang rebar3 git python3 build-essential libsqlite3-dev
-```
-
-Install [Ollama](https://docs.ollama.com/linux) and make sure its service is
-running. If it is not running as a service, start `ollama serve` in a separate
-terminal. Download a model, for example
-[`llama3.2:3b`](https://ollama.com/library/llama3.2) (about 2 GB):
-
-```sh
-ollama pull llama3.2:3b
 ```
 
 Clone this repository and copy the example configuration:
@@ -46,12 +50,22 @@ cp -n config.example.json "$HOME/.config/adam-eve/config.json"
 export AE_CONFIG_FILE="$HOME/.config/adam-eve/config.json"
 ```
 
-Open `~/.config/adam-eve/config.json` in a text editor and replace
-`"your-installed-model"` under `providers.ollama` with `"llama3.2:3b"`, or
-the exact name of another model shown by `ollama list`. Leave `default_provider`
-as `"ollama"`. The controller reads the file specified by `AE_CONFIG_FILE`; it
-does not discover the file automatically. The copy command preserves an existing
-config file. Any readable absolute path can be used.
+Open `~/.config/adam-eve/config.json` in a text editor. Choose a configured
+profile, set `default_provider` to its name, and replace its `model` placeholder
+with a model available from that provider:
+
+- **OpenAI:** use the `openai` profile and set `OPENAI_API_KEY` in your shell.
+  For a compatible service, also set its `base_url` and, if needed, its `wire`.
+- **OpenCode Go:** use the `opencode-go` profile and set `OPENCODE_GO_API_KEY`.
+- **Anthropic:** add `"anthropic": {"adapter": "anthropic", "model": "your-model"}`
+  inside `providers`, select `anthropic`, and set `ANTHROPIC_API_KEY`.
+- **Ollama:** use the `ollama` profile, start Ollama, and install the selected
+  model. [Getting started](docs/OPERATIONS.md) includes a local setup example.
+
+For example, export an API key with `export OPENAI_API_KEY='your-api-key'`.
+The controller reads the file specified by `AE_CONFIG_FILE`; it does not discover
+the file automatically. The copy command preserves an existing config file.
+Any readable absolute path can be used.
 
 Build and provision an identity, then start the controller:
 
@@ -71,8 +85,8 @@ Enter the following line in the running `scripts/ae` session and press Enter:
 
 The controller returns a JSON object with the agent's reply in `text` and
 `"committed":true`. Each new message needs a new `request_id`; keep the same
-`session_id` to continue the conversation. The timeout above allows extra time
-for local model loading; adjust it if needed.
+`session_id` to continue the conversation. Adjust the timeout above for your
+provider and model if needed.
 
 Press Ctrl+D to stop. To continue later, set the same `AE_CONFIG_FILE`,
 `AE_DATA_ROOT`, and `AE_LLM_TIMEOUT_MS` in your shell and run `scripts/ae` from
@@ -83,11 +97,10 @@ configuration, retry and handoff procedures.
 
 ## Configuration
 
-The example configuration also contains API-key provider profiles and a disabled
-Telegram section. Edit the profiles you want to use; credentials are referenced
-through environment variables or private files and remain in the controller.
-For an Ollama-only setup without a configuration file, leave `AE_CONFIG_FILE`
-unset and set `AE_LLM_MODEL` to your installed model name.
+The example configuration includes a disabled Telegram section. Credentials are
+referenced through environment variables or private files and remain in the
+controller. The evolution provider can be configured independently of the
+conversation provider.
 
 - [LLM providers](docs/PROVIDERS.md) — profiles, credentials, models, and thinking.
 - [Telegram](docs/TELEGRAM.md) — bot setup, allowlists, commands, and topics.
