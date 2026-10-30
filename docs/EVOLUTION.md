@@ -112,7 +112,7 @@ deployment approval, bound to that manifest. No job or agent request changes the
 manifest or creates a controller-authorized objective on its own.
 
 `seed_evolver` asks the broker for public job status, then asks the configured
-Ollama adapter for a JSON source-list/read action, an exact-text edit, or a complete
+evolution provider for a JSON source-list/read action, an exact-text edit, or a complete
 unified patch with structured rationale. Source reads support paginated paths and byte ranges;
 the strategy keeps bounded recent authoring context instead of requiring the
 whole repository in one prompt. Proposal identities include the durable job and
