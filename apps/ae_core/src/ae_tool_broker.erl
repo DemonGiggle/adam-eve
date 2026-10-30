@@ -5,7 +5,11 @@
 
 start_link(Config) -> gen_server:start_link({local, ?MODULE}, ?MODULE, Config, []).
 request(Auth, Request, Message) -> gen_server:call(?MODULE, {tool, Auth, Request, Message}, 310000).
-request_evolution(Auth, Job, Message) -> gen_server:call(?MODULE, {evolution_tool, Auth, Job, Message}, 310000).
+request_evolution(Auth, Id, Message) ->
+    Timeout = case ae_store:evolution({get, Id}) of
+        #{<<"deadline">> := Deadline} -> max(10000, Deadline - erlang:system_time(millisecond) + 10000);
+        _ -> 10000 end,
+    gen_server:call(?MODULE, {evolution_tool, Auth, Id, Message}, Timeout).
 init(Config) -> {ok, Config}.
 handle_call({evolution_tool, Auth, Job, Message}, _, Config) ->
     Reply = case ae_store:authorized(Auth) of

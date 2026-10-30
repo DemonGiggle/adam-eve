@@ -38,11 +38,13 @@ execute(<<"evolution_status">>, Args, _, _, Job, _) when map_size(Args) =:= 0 ->
 execute(<<"evolution_llm">>, #{<<"call_id">> := Call, <<"messages">> := Messages} = Args,
         Call, Auth, Job, Config) when map_size(Args) =:= 2 ->
     true = valid_messages(Messages),
+    ModelTimeout = maps:get(evolution_llm_timeout, Config, maps:get(llm_timeout, Config)),
+    true = is_integer(ModelTimeout) andalso ModelTimeout > 0,
     Id = maps:get(<<"id">>, Job), Hash = ae_policy:digest(Messages),
     case ae_store:evolution({reserve_llm, Auth, Id, Call, Hash}) of
         {ok, reserved} ->
             Remaining = maps:get(<<"deadline">>, Job) - erlang:system_time(millisecond),
-            Timeout = max(1, min(Remaining, maps:get(llm_timeout, Config))),
+            Timeout = max(1, min(Remaining, ModelTimeout)),
             Result = case ae_llm_ollama:complete_budgeted(Messages, Config#{llm_timeout := Timeout,
                     authoring_limits => maps:get(<<"limits">>, Job)},
                     maps:get(<<"tokens_per_call">>, maps:get(<<"limits">>, Job))) of

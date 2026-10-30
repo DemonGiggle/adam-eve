@@ -24,8 +24,12 @@ export AE_LIVE_MODEL_DIGEST=the-64-hex-model-digest-from-the-local-api-tags-resp
 Also provide `AE_SANDBOX_LIMITS_JSON` with the complete runtime limits described
 in the isolation guide. Build, evaluation and evolution budgets are explicitly
 declared in the demonstration script as local test policy. Adjust them for the
-test environment before running; they are not production defaults. The runtime
-wall allowance must cover authoring and the demonstration, and its CPU allowance
+test environment before running; they are not production defaults.
+
+The authoring HTTP timeout defaults to 900000 ms in this harness to accommodate
+CPU-only inference; `AE_EVOLUTION_LLM_TIMEOUT_MS` can override it. The remaining
+durable job time caps every call, and the ordinary conversation timeout is separate.
+The runtime wall allowance must cover authoring and the demonstration, and its CPU allowance
 must leave enough job budget for staging/observation. `AE_JSX_PACKAGE` can select
 the local pinned JSX package instead of the standard rebar cache path.
 

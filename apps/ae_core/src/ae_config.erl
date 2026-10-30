@@ -13,14 +13,19 @@ load() ->
     Url = env("AE_LLM_URL", "http://127.0.0.1:11434/api/chat"),
     #{scheme := "http", host := Host} = uri_string:parse(Url),
     true = lists:member(Host, ["127.0.0.1", "localhost", "::1"]),
+    LlmTimeout = integer_env("AE_LLM_TIMEOUT_MS", 30000, 100, 300000),
     maps:merge(isolation(), #{root => Root, model => Model, url => Url,
-      llm_timeout => integer_env("AE_LLM_TIMEOUT_MS", 30000, 100, 300000),
+      llm_timeout => LlmTimeout, evolution_llm_timeout => evolution_llm_timeout(LlmTimeout),
       runtime_start_timeout => integer_env("AE_RUNTIME_START_TIMEOUT_MS", 5000, 100, 30000),
       max_tokens => integer_env("AE_LLM_MAX_TOKENS", 512, 1, 8192),
       context_turns => integer_env("AE_CONTEXT_TURNS", 8, 1, 8),
       max_llm_attempts => integer_env("AE_MAX_LLM_ATTEMPTS", 3, 1, 10),
       handoff_limits => handoff_limits(), candidate_builder => candidate_builder(), candidate_evaluator => candidate_evaluator(),
       evolution_requested => os:getenv("AE_EVOLUTION_ENABLED") =:= "true", evolution_limits => evolution_limits()}).
+
+evolution_llm_timeout(Default) ->
+    try integer_env("AE_EVOLUTION_LLM_TIMEOUT_MS", Default, 100, 3600000)
+    catch _:_ -> undefined end.
 
 evolution_limits() ->
     try

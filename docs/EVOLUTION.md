@@ -118,9 +118,11 @@ authoring uses temperature zero. This follows Ollama's
 [structured output interface](https://docs.ollama.com/capabilities/structured-outputs).
 The agent and broker still validate actions, scope and budgets independently;
 schema-constrained decoding does not establish source or patch correctness.
-The authoring exchange and its RPC waits use the durable job deadline rather
-than an independent five-minute cap; every individual HTTP call remains bounded
-by the configured provider timeout. Source-read examples use the job's permitted
+The authoring exchange and its RPC waits use the durable job deadline. Each
+HTTP call uses the authoring-only `AE_EVOLUTION_LLM_TIMEOUT_MS` (100–3600000 ms)
+when set, otherwise the ordinary provider timeout. Every call is also capped by the job's remaining
+time. A malformed authoring timeout disables evolution while ordinary service
+remains available. Source-read examples use the job's permitted
 page size to reduce unnecessary model round trips.
 The advertised raw read size accounts for JSON/base64 overhead, and the model's
 source-read schema is capped to that job-specific window.

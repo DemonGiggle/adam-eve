@@ -16,6 +16,8 @@ callback_mode() -> handle_event_function.
 configured(Config) ->
     try
         true = maps:get(evolution_requested, Config, false),
+        ModelTimeout = maps:get(evolution_llm_timeout, Config, maps:get(llm_timeout, Config, 30000)),
+        true = is_integer(ModelTimeout) andalso ModelTimeout >= 100 andalso ModelTimeout =< 3600000,
         bubblewrap = maps:get(runtime_isolation, Config),
         {ok, _} = ae_evolution_limits:validate(maps:get(evolution_limits, Config)),
         {ok, _} = ae_builder:validate_config(maps:get(candidate_builder, Config)),

@@ -103,6 +103,7 @@ def main():
         "build_ms": 180000, "evaluation_ms": 600000, "cpu_ms": 1200000,
         "memory_bytes": 536870912, "processes": 64, "disk_reserve_bytes": 16777216}
     settings = {"AE_LLM_MODEL": model, "AE_LLM_URL": url, "AE_LLM_TIMEOUT_MS": "300000",
+        "AE_EVOLUTION_LLM_TIMEOUT_MS": os.environ.get("AE_EVOLUTION_LLM_TIMEOUT_MS", "900000"),
         "AE_RESOURCE_LIMITS_MODE": resource_mode,
         "AE_EVOLUTION_ENABLED": "true", "AE_EVOLUTION_LIMITS_JSON": json.dumps(limits),
         "AE_BUILD_CONFIG_JSON": json.dumps(builder), "AE_APPROVAL_TTL_MS": "120000",

@@ -21,7 +21,7 @@ def main():
                 controller = Controller(root, provider.server_port, {
                     "AE_EVOLUTION_ENABLED": requested, "AE_RUNTIME_ISOLATION": "development",
                     "AE_EVOLUTION_LIMITS_JSON": "{}", "AE_BUILD_CONFIG_JSON": "{}",
-                    "AE_EVAL_CONFIG_JSON": "{}"})
+                    "AE_EVAL_CONFIG_JSON": "{}", "AE_EVOLUTION_LLM_TIMEOUT_MS": "invalid"})
                 try:
                     status = controller.command("evolution")
                     assert status["enabled"] is False, status
