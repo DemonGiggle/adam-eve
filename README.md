@@ -1,5 +1,9 @@
 # adam-eve
 
+[![Erlang/OTP 24+](https://img.shields.io/badge/Erlang%2FOTP-24%2B-A90533?logo=erlang&logoColor=white)](https://www.erlang.org/)
+[![Platform: Linux](https://img.shields.io/badge/platform-Linux-FCC624?logo=linux&logoColor=black)](docs/ISOLATION.md)
+[![Tests: scripts/test](https://img.shields.io/badge/tests-scripts%2Ftest-blue)](scripts/test)
+
 > A self-evolving AI agent built on Erlang/OTP
 
 adam-eve separates a trusted controller from replaceable Adam/Eve agent runtimes.
