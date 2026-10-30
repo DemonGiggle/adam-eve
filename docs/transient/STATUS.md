@@ -2,7 +2,7 @@
 
 This report tracks the current implementation against SPEC v0.1 revision 3.
 It describes implemented behavior
-and existing test evidence; it does not change the requirements in [SPEC.md](SPEC.md).
+and existing test evidence; it does not change the requirements in [SPEC.md](../SPEC.md).
 The v0.1 acceptance criteria are demonstrated on the Linux host with the explicit
 Bubblewrap `process` profile. Evolution is disabled by default and can be
 explicitly enabled only with complete limits, retention policy and restricted
@@ -84,11 +84,11 @@ supervised evaluator. Digest-only manual staging still rejects them with
 scorecard and requires explicit approval after standby checks; a scorecard alone
 does not authorize promotion. The supervised `ae_evolution` state machine and
 operator CLI now drive this path. Configuration and controls are documented in
-[EVOLUTION.md](EVOLUTION.md); evaluation scope is in [EVALUATION.md](EVALUATION.md).
+[EVOLUTION.md](../EVOLUTION.md); evaluation scope is in [EVALUATION.md](../EVALUATION.md).
 
 ## Acceptance criteria crosswalk
 
-Numbers refer to [SPEC §14](SPEC.md#14-v01-acceptance-criteria). “Manual” means
+Numbers refer to [SPEC §14](../SPEC.md#14-v01-acceptance-criteria). “Manual” means
 the existing trusted, manually authored deployment path; it does not count as
 the Phase 2 self-evolution demonstration.
 
@@ -113,10 +113,10 @@ the Phase 2 self-evolution demonstration.
 
 Ollama, OpenAI-compatible, OpenCode Go and Anthropic API adapters support
 conversation and bounded authoring. Configured profiles, credentials, model
-selection and accounting are described in [PROVIDERS.md](PROVIDERS.md).
+selection and accounting are described in [PROVIDERS.md](../PROVIDERS.md).
 Automated checks use a fixture provider rather than an installed live model.
 An opt-in real-model acceptance harness is documented in
-[LIVE_EVOLUTION.md](LIVE_EVOLUTION.md). The recorded host run passed both
+[LIVE_EVOLUTION.md](../LIVE_EVOLUTION.md). The recorded host run passed both
 successive generations with `qwen3.8:27b`. The model supplied every replacement;
 the seed assembled diffs from complete pinned source reads. No handwritten
 replacement was injected into either accepted job. Earlier failed runs remain
@@ -137,5 +137,5 @@ advanced retrieval/task workflows and distributed failover remain later work.
 Production operators supply their own limits, objectives, backup schedule/storage
 and restore evidence for the required failure domain.
 
-Implementation details and test entry points are in [EVOLUTION.md](EVOLUTION.md),
-[BUILD.md](BUILD.md), [ISOLATION.md](ISOLATION.md), [MEMORY.md](MEMORY.md), and [RECOVERY.md](RECOVERY.md).
+Implementation details and test entry points are in [EVOLUTION.md](../EVOLUTION.md),
+[BUILD.md](../BUILD.md), [ISOLATION.md](../ISOLATION.md), [MEMORY.md](../MEMORY.md), and [RECOVERY.md](../RECOVERY.md).

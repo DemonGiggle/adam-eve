@@ -1,44 +1,27 @@
 # adam-eve
 
-An Erlang/OTP agent with a trusted controller and replaceable Adam/Eve runtimes.
-The architecture and planned milestones are in [docs/SPEC.md](docs/SPEC.md).
-Acceptance evidence and operational scope are tracked in [docs/STATUS.md](docs/STATUS.md).
-Versioned facts, preferences and summaries, their source references, and the
-operator memory commands are described in [docs/MEMORY.md](docs/MEMORY.md).
-Configured Ollama and API-key providers are described in [docs/PROVIDERS.md](docs/PROVIDERS.md),
-and the optional Telegram frontend is described in [docs/TELEGRAM.md](docs/TELEGRAM.md).
+> A self-evolving AI agent built on Erlang/OTP
 
-The v0.1 implementation supports controlled self-evolution: a trusted OTP controller
-serves isolated Adam/Eve BEAM processes, stages built candidates, and
-switches between them with durable approval, checkpoints, observation, and
-rollback. The seed calls a configured local Ollama model through a broker;
-conversation and pending turns survive runtime replacement. Evolution is disabled
-by default and requires explicit limits and restricted execution to enable.
+adam-eve separates a trusted controller from replaceable Adam/Eve agent runtimes.
+Conversations and code survive runtime replacement, while proposed changes pass
+independent checks and explicit approval before promotion.
 
-Phase 2 includes a durable bounded authoring ledger, scoped
-paginated source access, a protected patch policy, and a restricted
-runtime backend. The seed can read scoped source and submit budgeted structured
-LLM patches through an internal controller-authorized authoring exchange. The
-isolated builder now records execution budgets and retains generated releases
-for testing. A supervised independent evaluator now compares restricted releases
-and saves bound scorecards. The evolution state machine and CLI drive bounded
-authoring/repair through staging and explicit approval, then track promotion and
-rollback. Persistent disable keeps ordinary service available. See
-[docs/EVALUATION.md](docs/EVALUATION.md). Consistent online backups and fenced restoration are
-available through the operator commands in [docs/RECOVERY.md](docs/RECOVERY.md).
-See [docs/EVOLUTION.md](docs/EVOLUTION.md) and
-[docs/ISOLATION.md](docs/ISOLATION.md) for implemented behavior, required host
-configuration and operational scope. A real-model host acceptance run completed
-two successive independently evaluated and explicitly approved generations,
-full restart and a backup/restore drill; see the
-[recorded evidence](docs/evidence/2026-10-30-host-v0.1.json).
+## Features
 
-Development requirements: Erlang/OTP 24+, rebar3, a C compiler, make, and SQLite
-development headers, Git, and Python 3. Dependencies are pinned in the controller
-and seed `rebar.lock` files. Verified with OTP 24 and rebar3 3.22.1 on Linux.
-On Linux x86_64 the sandbox component tests additionally require Bubblewrap and
-libseccomp. Full resource-boundary tests need the cgroup delegation described in
-the isolation guide.
+- **Durable conversations** with replay, bounded retries, and persistent memory.
+- **Controlled evolution** with isolated candidate builds, evaluation, approval,
+  observation, and rollback.
+- **LLM providers** for Ollama, OpenAI-compatible APIs, OpenCode Go, and Anthropic.
+- **Telegram integration** for private chats, groups, forum topics, and photos.
+- **Recoverable state** with retained source and artifacts, backups, and fenced restore.
+- **Host execution** on Linux; complete aggregate resource enforcement is planned
+  for v0.2.
+
+## Quick start
+
+Install Erlang/OTP 24+, rebar3, Git, Python 3, a C compiler, make, and SQLite
+development headers. Start Ollama and install a model, then build and provision
+an identity:
 
 ```sh
 scripts/build
@@ -48,189 +31,51 @@ scripts/publish_seed --data-root "$AE_DATA_ROOT"
 scripts/ae
 ```
 
-Start Ollama with your chosen model installed before submitting a turn. The
-adapter uses its [non-streaming chat API](https://docs.ollama.com/api/chat).
-The data root must be an absolute, private directory outside this checkout;
-the publisher creates it with mode 0700 if it does not exist. Publish once per
-identity. Restarts use the persisted active artifact rather than rebuilding or
-replacing it from the checkout.
-
-The CLI accepts one JSON object per line and prints one JSON result per command:
+The controller reads one JSON command per line and returns one JSON result:
 
 ```jsonl
-{"op":"turn","request_id":"turn-1","session_id":"main","message":"Remember that I like tea."}
-{"op":"restart"}
-{"op":"turn","request_id":"turn-2","session_id":"main","message":"What do I like?"}
+{"op":"turn","request_id":"turn-1","session_id":"main","message":"Hello!"}
 {"op":"status"}
-{"op":"history"}
 ```
 
-EOF stops the controller and seed. Run `scripts/ae` again with the same data root
-and model settings to continue. Logs go to stderr; command results go to stdout.
-Use a stable request ID to retry a disconnected turn: a completed request returns
-its saved reply without another LLM call. Conflicting reuse of an ID is rejected.
+Send EOF to stop. Start `scripts/ae` again with the same data root to continue.
+The data root must be an absolute, private directory outside the checkout.
+See [Getting started and operation](docs/OPERATIONS.md) for requirements,
+configuration, retry and handoff procedures.
 
-Only one pending turn is admitted at a time. A provider failure leaves the turn
-pending; resubmitting it returns the recorded outcome. If a controller crash
-leaves a reserved call without a recorded result, resubmission returns
-`tool_outcome_unknown`. Authorize another potentially billed call with
-`{"op":"retry","request_id":"turn-1"}`, then resubmit the original turn. Attempts
-are durably bounded across restarts. To stop retrying and admit other turns, use
-`{"op":"cancel","request_id":"turn-1"}`. Cancellation preserves audit events and
-excludes the unfinished turn from subsequent model context.
+## Configuration
 
-For a manual handoff, configure all four limits before starting the controller.
-For example, a local development exercise could use:
+Ollama works with `AE_LLM_MODEL` and the default local endpoint. For API-key
+providers or Telegram, copy [config.example.json](config.example.json), edit the
+profiles, and set `AE_CONFIG_FILE` to its absolute path. Credentials are referenced
+through environment variables or private files and remain in the controller.
 
-```sh
-export AE_APPROVAL_TTL_MS=60000
-export AE_OBSERVE_MS=10000
-export AE_HEALTH_INTERVAL_MS=250
-export AE_QUIESCE_TIMEOUT_MS=5000
-```
+- [LLM providers](docs/PROVIDERS.md) — profiles, credentials, models, and thinking.
+- [Telegram](docs/TELEGRAM.md) — bot setup, allowlists, commands, and topics.
 
-There are no implicit defaults for handoffs. Missing or invalid limits disable
-staging while ordinary user service remains available. Each value must be a
-positive integer of at most 300000 milliseconds; the chosen limits are saved in
-the deployment record.
+Evolution is disabled by default. Enabling it requires explicit limits and a
+restricted runtime; see [Controlled evolution](docs/EVOLUTION.md) and
+[Isolation](docs/ISOLATION.md).
 
-Prepare a **trusted, manually authored** Git patch against the retained active
-source, then publish a different artifact:
+## Documentation
 
-```sh
-scripts/publish_candidate --data-root "$AE_DATA_ROOT" \
-  --patch /absolute/path/manual-change.patch --objective 'Describe the change'
-```
+- [Getting started and operation](docs/OPERATIONS.md) — build, CLI, configuration, and manual handoff.
+- [Controlled evolution](docs/EVOLUTION.md) — authoring, approval, and recovery.
+- [Building](docs/BUILD.md) and [evaluation](docs/EVALUATION.md) — candidate construction and checks.
+- [Isolation](docs/ISOLATION.md) — sandbox requirements and resource profiles.
+- [Memory](docs/MEMORY.md) — persistent facts and context.
+- [Backup and restore](docs/RECOVERY.md) and [retention](docs/RETENTION.md) — state and artifact management.
+- [Runtime protocol](docs/PROTOCOL.md) — controller and agent communication.
+- [Specification](docs/SPEC.md) — architecture, invariants, and milestones.
+- [Live-model demonstration](docs/LIVE_EVOLUTION.md) — optional acceptance exercise.
 
-The publisher reads the current source revision from SQLite, checks out that
-retained Git commit, applies the patch in a disposable workspace, and records
-the parent in both Git ancestry and the new manifest. Only seed source/tests may
-change; manifests, dependency locks, and the shared protocol are protected. Manual
-patches are limited to 256 KiB. This command runs a build with the operator's
-permissions and is **not** an isolated builder for generated or untrusted code.
+## Tests
 
-The final stdout line is the published artifact manifest; build logs go to
-stderr. Publication does not change routing. In the existing `scripts/ae`
-session, stage its digest, inspect the returned baseline/artifact/evaluation and
-the source diff, then explicitly approve that exact deployment:
-
-```jsonl
-{"op":"stage","artifact_digest":"<digest from the published manifest>"}
-{"op":"approve","deployment_id":"<returned deployment_id>","approval_binding":"<returned approval_binding>"}
-{"op":"deployment","deployment_id":"<deployment_id>"}
-```
-
-Inspect the source diff using the two returned source revisions and
-`git --git-dir "$AE_DATA_ROOT/source.git" diff <baseline-revision> <candidate-revision>`.
-The staging gates check health, protocol/schema support, and a synthetic turn
-with mocked context and LLM results. They make no production provider calls or
-conversation writes. The active runtime keeps serving while approval is pending.
-`{"op":"reject","deployment_id":"..."}` rejects a staged candidate. Expired
-approvals, runtime replacement, or changed source/executable/manifest contents
-cannot authorize promotion. The current gates are the manual development
-handoff checks. Generated candidates use a separate job-bound staging entrypoint
-that includes the independent scorecard in the approval binding. The evolution
-CLI trigger and controls are described in [docs/EVOLUTION.md](docs/EVOLUTION.md).
-
-Promotion closes admission and new broker calls, drains the in-flight turn or
-leaves it durably retryable at the configured deadline, saves a controller-owned
-checkpoint, and restores the candidate. The routing switch, new epoch, promotion
-event, and deployment status share one transaction. Committed replies and tool
-results are retained through later rollback. Health probes run during observation;
-only a candidate that completes observation becomes last known-good. A candidate
-crash rolls back to the predecessor under another new epoch. Controller restart
-during observation also rolls back; an unpromoted staged candidate is rejected
-on recovery. Rollback failure closes admission and leaves the controller
-available for inspection. Repeated active-runtime crashes are bounded to three
-automatic restarts per 30 seconds; `restart` requests explicit recovery after
-fixing the cause. Runtime failures are audited.
-
-| Environment | Default | Meaning |
-|---|---|---|
-| `AE_DATA_ROOT` | required | Persistent storage, outside the checkout |
-| `AE_LLM_MODEL` | required | Installed Ollama model name |
-| `AE_LLM_URL` | `http://127.0.0.1:11434/api/chat` | Loopback HTTP endpoint only |
-| `AE_LLM_TIMEOUT_MS` | `30000` | Provider timeout, 100–300000 ms |
-| `AE_EVOLUTION_LLM_TIMEOUT_MS` | Conversation timeout | Authoring-only provider timeout, 100–3600000 ms, capped by the job deadline |
-| `AE_RETENTION_POLICY_JSON` | Required to enable evolution | Explicit preservation policy; see [RETENTION.md](docs/RETENTION.md) |
-| `AE_RUNTIME_START_TIMEOUT_MS` | `5000` | Runtime connect/authentication/restore deadline, 100–30000 ms |
-| `AE_LLM_MAX_TOKENS` | `512` | Requested output limit, 1–8192 |
-| `AE_CONTEXT_TURNS` | `8` | Recent turns supplied per session, 1–8 |
-| `AE_MAX_LLM_ATTEMPTS` | `3` | Operator-authorized calls per turn, 1–10 |
-| `AE_APPROVAL_TTL_MS` | required for handoff | Staging/approval lifetime |
-| `AE_OBSERVE_MS` | required for handoff | Post-switch observation window |
-| `AE_HEALTH_INTERVAL_MS` | required for handoff | Staged/active probe interval |
-| `AE_QUIESCE_TIMEOUT_MS` | required for handoff | In-flight turn drain deadline |
-| `AE_RUNTIME_ISOLATION` | `development` | Trusted manual seed or `bubblewrap` backend |
-| `AE_RESOURCE_LIMITS_MODE` | `cgroup` for compatibility | Select `process` for v0.1 host execution; `cgroup` for aggregate enforcement |
-| `AE_CGROUP_ROOT` | required for cgroup profile | Delegated cgroup v2 subtree |
-| `AE_SANDBOX_LIMITS_JSON` | required for Bubblewrap | Explicit resource limits; see isolation guide |
-
-All conversation events remain durable even when only recent history is sent to
-the model. The LLM endpoint receives no controller credentials or agent-selected
-URL. Response bodies are limited to 1 MiB and reply text to 64 KiB.
-
-The controller uses SQLite WAL with `synchronous=FULL`. Runtime activation
-increments a durable epoch. Turn and tool writes check the committed runtime
-identity and epoch in the same transaction as their audit event. The controller
-commits replies before reporting `"committed": true` to the CLI.
-
-`scripts/publish_seed` freezes the permitted seed/protocol source, commits it to
-`source.git` under a protected generation ref, builds a separate seed escript,
-and publishes its exact bytes under `artifacts/<sha256>/seed`. Publication syncs
-files and directories before creating bootstrap metadata. The store retains the
-artifact manifest. Before every runtime launch the controller verifies the
-executable digest, source ref/tree and Git object integrity, capabilities, state
-schema, and recorded OTP/ERTS versions. The seed never loads into the controller
-VM. Disposable workspaces can be removed without losing retained code or state.
-
-The runtime protocol is documented in [docs/PROTOCOL.md](docs/PROTOCOL.md).
-Published seeds now use a fixed, reproducible compiler recipe with pinned
-dependency-package verification and embedded provenance. The trusted manual
-build path and its limits are documented in [docs/BUILD.md](docs/BUILD.md).
-
-Run all checks without an installed model or provider credentials:
+Run the suite on the host without a model or provider credentials:
 
 ```sh
 scripts/test
 ```
 
-EUnit covers protocol bounds, durable turn deduplication, fencing, broker denial,
-retry budgets, and transactional handoff/rollback invariants. Integration checks use real controller/seed processes and a
-fixture HTTP provider. They kill the seed and controller, verify memory replay
-and pending-call recovery, delete disposable workspaces, restart from retained
-contents, and verify that corrupt executables or missing source refs fail closed.
-Phase 1 checks exercise different manual generations through Adam → Eve → Adam,
-approval expiry/denial/binding, staged and active crashes, controller/lifecycle
-process loss, in-flight quiescence, rollback of acknowledged work, cumulative
-source ancestry, and bounded recovery into a still-functional controller.
-Additional EUnit checks cover the evolution ledger, reservation/repair limits,
-proposal deduplication, protected patches, and bounded immutable source reads.
-The sandbox component checks run with `scripts/test`; full cgroup checks require
-an explicitly configured test subtree and report their skips when unavailable.
-Recovery checks snapshot a live WAL, verify retained source and releases, restore
-pending work behind closed admission, and replay committed replies after explicit
-reconciliation. They also restore a snapshot taken during deployment observation.
-
-The default development backend runs trusted manual seeds as the controller's OS
-user. Generated candidates require the restricted Bubblewrap backend;
-the supervised builder uses that backend and retains releases for evaluation.
-Restricted build and runtime crash-recovery checks have passed in a disposable
-Linux VM with cgroup delegation. A generated-candidate promotion/crash/rollback
-also preserves acknowledged work under that backend. The explicit process
-profile now runs builds, independent evaluation, recovery and generated
-promotion/rollback directly on the host; complete aggregate resource enforcement
-is deferred to v0.2. An orchestrated variant
-repairs a real compiler failure, reaches explicit approval, and verifies persistent
-disable/re-enable across restart. Nine controller crash boundaries, resumable
-partial-publication collection, and local backup/restore are tested. The escript retains compiled code and dependencies;
-its recorded host ERTS must remain installed. No live-model quality claim is made
-by the fixture tests.
-
-The opt-in [live-model demonstration](docs/LIVE_EVOLUTION.md) runs two successive
-authoring objectives with a real local Ollama model and the restricted backend,
-retaining review and restart evidence. The 2026-10-30 run passed with
-`qwen3.8:27b`; its second change preserves the first as a required regression.
-Complete aggregate resource enforcement belongs to v0.2. Automatic historical
-deletion, uncertain workspace collection and off-host recovery configuration
-remain outside the demonstrated local scope.
+The suite uses local provider fixtures. Some sandbox checks require a delegated
+cgroup v2 test root; see [Isolation](docs/ISOLATION.md).
