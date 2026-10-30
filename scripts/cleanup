@@ -1,0 +1,16 @@
+#!/usr/bin/env python3
+"""Plan or remove recovered partial publications; retain every complete version."""
+import argparse
+import json
+import sys
+from ae_cleanup import cleanup
+
+parser = argparse.ArgumentParser(description=__doc__)
+parser.add_argument("--data-root", required=True)
+parser.add_argument("--apply", action="store_true", help="remove the listed partial publications; default is a read-only plan")
+args = parser.parse_args()
+try:
+    print(json.dumps(cleanup(args.data_root, args.apply), sort_keys=True))
+except Exception as error:
+    print(f"Cleanup refused: {error}", file=sys.stderr)
+    sys.exit(1)

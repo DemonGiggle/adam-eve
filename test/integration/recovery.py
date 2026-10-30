@@ -60,10 +60,17 @@ def main():
             "rpo_ms": 60000, "rto_ms": 60000, "failure_domain": "local disposable test disk",
             "disk_reserve_bytes": 1024 * 1024}))
         run("publish_seed", "--data-root", source)
-        controller = Controller(source, provider.server_port)
+        controller = Controller(source, provider.server_port, {"AE_RETENTION_POLICY_JSON": json.dumps({
+            "promoted_generations": "all", "rejected_attempts": "all", "audit": "all"})})
         try:
             original = controller.command("status")
             assert turn(controller, "committed", "remember saffron")["committed"] is True
+            partial = source / "artifacts/.publishing-drillxxx"
+            partial.mkdir(mode=0o700)
+            (partial / "seed").write_bytes(b"interrupted publication")
+            assert run("cleanup", "--data-root", source)["remaining_publications"] == [partial.name]
+            cleaned = run("cleanup", "--data-root", source, "--apply")
+            assert cleaned["remaining_publications"] == [] and not partial.exists()
             controller.send({"op": "turn", "request_id": "unknown", "session_id": "main", "message": "pause"})
             assert IN_FLIGHT.wait(10)
             # The live WAL contains both an acknowledged reply and a reserved effect.
@@ -154,6 +161,8 @@ def main():
             history = controller.command("history")["events"]
             assert any(e["seq"] == saved["recovery_point"]["event_seq"] for e in history)
             assert sum(e["kind"] == "restore_verified" for e in history) == 1
+            assert sum(e["kind"] == "storage_cleanup_completed" and
+                e["data"]["id"] == cleaned["cleanup_id"] for e in history) == 1
             assert sum(e["kind"] == "assistant_reply" and e["data"]["request_id"] == "committed" for e in history) == 1
             # A restored identity can itself be backed up without losing its audit/floor.
             again = backup(target, backups, policy)
