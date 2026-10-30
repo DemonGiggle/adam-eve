@@ -7,16 +7,37 @@ make, and SQLite development headers. Dependencies are pinned in the controller
 and seed `rebar.lock` files. The restricted sandbox also requires Bubblewrap,
 libseccomp and prlimit; see [Isolation](ISOLATION.md).
 
-For a local Ollama model, start Ollama and install the model before submitting a
-turn. From the checkout:
+For a local Ollama model, start Ollama and install a model before submitting a
+turn. For example, run `ollama pull llama3.2:3b`. From the checkout, copy the
+example configuration:
+
+```sh
+mkdir -p "$HOME/.config/adam-eve"
+cp -n config.example.json "$HOME/.config/adam-eve/config.json"
+export AE_CONFIG_FILE="$HOME/.config/adam-eve/config.json"
+```
+
+Edit `providers.ollama.model` in that file to match the installed model, such as
+`llama3.2:3b`. The example location is a convention, not an automatically
+discovered path: set
+`AE_CONFIG_FILE` to the absolute path of the file you want the controller to
+read. Keep it set when restarting the controller. Existing files are not
+overwritten by the copy command.
+
+Then build and provision an identity:
 
 ```sh
 scripts/build
 export AE_DATA_ROOT="$HOME/.local/share/adam-eve"
-export AE_LLM_MODEL="your-installed-model"
+export AE_LLM_TIMEOUT_MS=120000
 scripts/publish_seed --data-root "$AE_DATA_ROOT"
 scripts/ae
 ```
+
+Alternatively, leave `AE_CONFIG_FILE` unset and set `AE_LLM_MODEL` to the
+installed model name to use the single default Ollama profile. `AE_LLM_MODEL`
+does not override a model in the configured profile map. See [LLM providers](PROVIDERS.md)
+for API-key providers and other configuration options.
 
 The data root must be an absolute, private directory outside the checkout. The
 publisher creates it with mode 0700 if needed. Publish once per identity;

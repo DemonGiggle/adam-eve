@@ -19,36 +19,75 @@ independent checks and explicit approval before promotion.
 
 ## Quick start
 
-Install Erlang/OTP 24+, rebar3, Git, Python 3, a C compiler, make, and SQLite
-development headers. Start Ollama and install a model, then build and provision
-an identity:
+On Linux, install Erlang/OTP 24+, rebar3, Git, Python 3, a C compiler, make,
+and SQLite development headers. For example, on Ubuntu 22.04 or newer:
+
+```sh
+sudo apt update
+sudo apt install erlang rebar3 git python3 build-essential libsqlite3-dev
+```
+
+Install [Ollama](https://docs.ollama.com/linux) and make sure its service is
+running. If it is not running as a service, start `ollama serve` in a separate
+terminal. Download a model, for example
+[`llama3.2:3b`](https://ollama.com/library/llama3.2) (about 2 GB):
+
+```sh
+ollama pull llama3.2:3b
+```
+
+Clone this repository and copy the example configuration:
+
+```sh
+git clone https://github.com/DemonGiggle/adam-eve.git
+cd adam-eve
+mkdir -p "$HOME/.config/adam-eve"
+cp -n config.example.json "$HOME/.config/adam-eve/config.json"
+export AE_CONFIG_FILE="$HOME/.config/adam-eve/config.json"
+```
+
+Open `~/.config/adam-eve/config.json` in a text editor and replace
+`"your-installed-model"` under `providers.ollama` with `"llama3.2:3b"`, or
+the exact name of another model shown by `ollama list`. Leave `default_provider`
+as `"ollama"`. The controller reads the file specified by `AE_CONFIG_FILE`; it
+does not discover the file automatically. The copy command preserves an existing
+config file. Any readable absolute path can be used.
+
+Build and provision an identity, then start the controller:
 
 ```sh
 scripts/build
 export AE_DATA_ROOT="$HOME/.local/share/adam-eve"
-export AE_LLM_MODEL="your-installed-model"
+export AE_LLM_TIMEOUT_MS=120000
 scripts/publish_seed --data-root "$AE_DATA_ROOT"
 scripts/ae
 ```
 
-The controller reads one JSON command per line and returns one JSON result:
+Enter the following line in the running `scripts/ae` session and press Enter:
 
 ```jsonl
 {"op":"turn","request_id":"turn-1","session_id":"main","message":"Hello!"}
-{"op":"status"}
 ```
 
-Send EOF to stop. Start `scripts/ae` again with the same data root to continue.
+The controller returns a JSON object with the agent's reply in `text` and
+`"committed":true`. Each new message needs a new `request_id`; keep the same
+`session_id` to continue the conversation. The timeout above allows extra time
+for local model loading; adjust it if needed.
+
+Press Ctrl+D to stop. To continue later, set the same `AE_CONFIG_FILE`,
+`AE_DATA_ROOT`, and `AE_LLM_TIMEOUT_MS` in your shell and run `scripts/ae` from
+the checkout. Do not run `scripts/publish_seed` again for the same identity.
 The data root must be an absolute, private directory outside the checkout.
 See [Getting started and operation](docs/OPERATIONS.md) for requirements,
 configuration, retry and handoff procedures.
 
 ## Configuration
 
-Ollama works with `AE_LLM_MODEL` and the default local endpoint. For API-key
-providers or Telegram, copy [config.example.json](config.example.json), edit the
-profiles, and set `AE_CONFIG_FILE` to its absolute path. Credentials are referenced
+The example configuration also contains API-key provider profiles and a disabled
+Telegram section. Edit the profiles you want to use; credentials are referenced
 through environment variables or private files and remain in the controller.
+For an Ollama-only setup without a configuration file, leave `AE_CONFIG_FILE`
+unset and set `AE_LLM_MODEL` to your installed model name.
 
 - [LLM providers](docs/PROVIDERS.md) — profiles, credentials, models, and thinking.
 - [Telegram](docs/TELEGRAM.md) — bot setup, allowlists, commands, and topics.
