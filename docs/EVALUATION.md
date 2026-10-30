@@ -2,13 +2,15 @@
 
 `ae_eval_sup:start_job(JobId, Config, NotifyPid)` starts a temporary supervised
 `ae_evaluator` for a built job in `testing`. It runs the controller-owned Python
-judge outside the candidate runtime. There is no evolution CLI or automatic
-build-to-evaluation orchestration yet. Evaluation does not grant deployment
+judge outside the candidate runtime. The evolution state machine and operator
+CLI connect authoring, build, evaluation and staging. Evaluation does not grant deployment
 approval. Digest-only manual staging rejects generated releases; trusted
 `ae_deployment:stage_evolution/1` requires the specific evaluated job, performs
 fresh isolated standby checks, and then waits for explicit bound approval.
 That stage reserves its own remaining job CPU allowance before launch and
-enforces the job's memory/process ceilings and absolute runtime deadline.
+retains the job's requested resource ceilings and absolute runtime deadline.
+Complete aggregate CPU/memory/process enforcement requires the optional cgroup
+profile and is deferred to v0.2; the v0.1 host profile uses per-process limits.
 
 ## Isolation and durable results
 
@@ -24,9 +26,11 @@ seed, allowing an operator to reconstruct its nonce cases from that policy.
 
 Four sequential sandbox process groups share pessimistically reserved CPU
 slices: agent tests, baseline runtime, candidate runtime, and predecessor restore.
-Unused slices are not refunded. Memory/process limits cannot exceed the job's
-limits; the whole evaluation also has a deadline. Each process group uses the
-mandatory cgroup/namespace/seccomp boundary. Missing isolation fails closed.
+Unused slices are not refunded. Requested memory/process limits cannot exceed
+the job's limits; the whole evaluation also has a deadline. Each process group
+uses the mandatory namespace/seccomp boundary and its explicitly configured
+resource profile. Aggregate watchdogs require the cgroup profile. Missing
+namespace isolation fails closed; selecting cgroups never automatically downgrades.
 
 The judge keeps private cases, expected values, mock tools and synthetic history
 in its own process. A runtime receives only its sealed release and IPC socket.
@@ -73,12 +77,13 @@ mock token/cost values are explicit fixture measurements, not live billing data.
 
 ## Required configuration
 
-Set `AE_EVAL_CONFIG_JSON` to an object containing every field below. Missing or
-invalid configuration disables the evaluator; it never selects unlimited limits.
+Set `AE_EVAL_CONFIG_JSON` to an object containing the required fields below.
+Missing or invalid configuration disables the evaluator.
 
 | Field | Meaning |
 |---|---|
-| `cgroup_root` | Absolute delegated cgroup v2 subtree |
+| `cgroup_root` | Absolute cgroup path; unused by the process profile |
+| `resource_limits_mode` | Optional: `process` for v0.1 host execution; omitted values preserve the strict `cgroup` profile |
 | `source_bytes`, `source_files`, `artifact_bytes` | Public source/export and release ceilings |
 | `sandbox_limits` | All nine resource fields documented in [ISOLATION.md](ISOLATION.md) |
 | `startup_ms`, `turn_ms` | Bounded runtime handshake/restore and per-turn deadlines |
@@ -109,14 +114,15 @@ tests is not a claim of general intelligence improvement.
 
 [test/evaluation/policy.json](../test/evaluation/policy.json) is a small synthetic
 test policy, not a production policy or default budget. Judge checks run with
-`scripts/test`. Set `AE_TEST_CGROUP_ROOT` for the actual restricted comparisons
-and supplementary-test failure checks. Authoring integration additionally
-exercises supervised evaluation and fail-closed unavailable isolation when that
-test root is supplied. Software-emulated validation can explicitly select
+`scripts/test`, including actual restricted host comparisons, supplementary-test
+failures and supervised evaluation with the process profile. Set
+`AE_TEST_RESOURCE_LIMITS_MODE=cgroup` and `AE_TEST_CGROUP_ROOT` to repeat those
+checks with aggregate enforcement. Software-emulated validation can explicitly select
 `AE_TEST_EVAL_WALL_MS` and `AE_TEST_EVAL_CPU_MS`; those values do not alter
 production configuration.
 
-Validation includes the native controller/integration suite and separate
+Validation includes the native controller/integration suite using Bubblewrap
+process limits, as well as earlier separate
 unprivileged Linux VM runs with delegated cgroups: passing EUnit/Common Test,
 deliberately failing suites, accepted and rejected behavioral comparisons,
 predecessor restore, and supervised author → build → evaluate. Integration also
