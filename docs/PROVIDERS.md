@@ -4,10 +4,9 @@ Provider profiles follow the registry and credential-reference design in
 [q-agent](https://github.com/DemonGiggle/q-agent). Network requests and credentials
 belong to the trusted controller; agent runtimes receive normalized text results.
 
-Set `AE_CONFIG_FILE` to the absolute path of a JSON configuration based on
-[config.example.json](../config.example.json). The controller does not discover
-configuration files automatically; see [Getting started](OPERATIONS.md) for an
-example location and setup. Each profile has an operator-chosen
+The controller automatically reads `~/.config/adam-eve/config.json`, based on
+[config.example.json](../config.example.json). Set `AE_CONFIG_FILE` to an absolute
+path to use a different file; see [Getting started](OPERATIONS.md) for setup. Each profile has an operator-chosen
 name, an adapter, model, endpoint and optional thinking selection. Configure any
 number of profiles up to 32, including multiple instances of the same adapter.
 Unconfigured profiles cannot be selected. `AE_PROVIDERS_JSON` can supply the

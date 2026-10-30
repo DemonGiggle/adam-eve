@@ -26,8 +26,10 @@ history. Administrators must also be listed as users; `/restart` is accepted
 only from an allowed private administrator. Empty allowlists prevent startup.
 Bots and commands addressed to other bots are ignored.
 
+Save the configuration in `~/.config/adam-eve/config.json`, or set
+`AE_CONFIG_FILE` to an absolute path to use a different file.
+
 ```sh
-export AE_CONFIG_FILE=/absolute/path/to/config.json
 export TELEGRAM_BOT_TOKEN='your-bot-token'
 scripts/ae serve
 ```

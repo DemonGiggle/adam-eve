@@ -7,6 +7,7 @@ rebar3 eunit
 python3 -m unittest discover -s test/build -v
 python3 test/integration/host_build.py
 python3 test/integration/phase0.py
+python3 test/integration/defaults.py
 python3 test/integration/providers.py
 python3 test/integration/sessions.py
 python3 test/integration/cancellation.py

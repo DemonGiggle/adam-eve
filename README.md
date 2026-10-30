@@ -50,7 +50,6 @@ git clone https://github.com/DemonGiggle/adam-eve.git
 cd adam-eve
 mkdir -p "$HOME/.config/adam-eve"
 cp -n config.example.json "$HOME/.config/adam-eve/config.json"
-export AE_CONFIG_FILE="$HOME/.config/adam-eve/config.json"
 ```
 
 Open `~/.config/adam-eve/config.json` in a text editor. Choose a configured
@@ -66,17 +65,15 @@ with a model available from that provider:
   model. [Getting started](docs/OPERATIONS.md) includes a local setup example.
 
 For example, export an API key with `export OPENAI_API_KEY='your-api-key'`.
-The controller reads the file specified by `AE_CONFIG_FILE`; it does not discover
-the file automatically. The copy command preserves an existing config file.
-Any readable absolute path can be used.
+The controller automatically reads `~/.config/adam-eve/config.json`. Set
+`AE_CONFIG_FILE` only to use a different file, using an absolute path.
+The copy command preserves an existing config file.
 
 Build and provision an identity, then start the controller:
 
 ```sh
 scripts/build
-export AE_DATA_ROOT="$HOME/.local/share/adam-eve"
-export AE_LLM_TIMEOUT_MS=120000
-scripts/publish_seed --data-root "$AE_DATA_ROOT"
+scripts/publish_seed
 scripts/ae
 ```
 
@@ -88,12 +85,14 @@ Enter the following line in the running `scripts/ae` session and press Enter:
 
 The controller returns a JSON object with the agent's reply in `text` and
 `"committed":true`. Each new message needs a new `request_id`; keep the same
-`session_id` to continue the conversation. Adjust the timeout above for your
-provider and model if needed.
+`session_id` to continue the conversation. The provider timeout defaults to
+120000 ms; set `AE_LLM_TIMEOUT_MS` to override it if needed.
 
-Press Ctrl+D to stop. To continue later, set the same `AE_CONFIG_FILE`,
-`AE_DATA_ROOT`, and `AE_LLM_TIMEOUT_MS` in your shell and run `scripts/ae` from
-the checkout. Do not run `scripts/publish_seed` again for the same identity.
+Press Ctrl+D to stop. To continue later, run `scripts/ae` from the checkout.
+The data directory defaults to `~/.local/share/adam-eve` for both provisioning
+and the controller. Set `AE_DATA_ROOT` to override it, or pass `--data-root` to
+`scripts/publish_seed`. Keep any environment overrides set when restarting.
+Do not run `scripts/publish_seed` again for the same identity.
 The data root must be an absolute, private directory outside the checkout.
 See [Getting started and operation](docs/OPERATIONS.md) for requirements,
 configuration, retry and handoff procedures.

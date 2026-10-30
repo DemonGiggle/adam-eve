@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Build and durably publish the trusted boot seed."""
 import argparse
+import os
 from pathlib import Path
 import shutil
 import tempfile
@@ -9,9 +10,14 @@ from ae_publish import data_root, publication_lock, publish, run
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--data-root", required=True, type=Path)
+    parser.add_argument("--data-root", type=Path,
+        help="identity directory (default: AE_DATA_ROOT or ~/.local/share/adam-eve)")
     args = parser.parse_args()
-    root = data_root(args.data_root)
+    selected_root = args.data_root
+    if selected_root is None:
+        selected_root = (Path(os.environ["AE_DATA_ROOT"]) if "AE_DATA_ROOT" in os.environ
+            else Path.home() / ".local/share/adam-eve")
+    root = data_root(selected_root)
     checkout = Path(__file__).resolve().parent.parent
     with publication_lock(root):
         if (root / "bootstrap.json").exists() or (root / "state/agent.sqlite3").exists():

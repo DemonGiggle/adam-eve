@@ -14,30 +14,32 @@ example configuration:
 ```sh
 mkdir -p "$HOME/.config/adam-eve"
 cp -n config.example.json "$HOME/.config/adam-eve/config.json"
-export AE_CONFIG_FILE="$HOME/.config/adam-eve/config.json"
 ```
 
 Edit `providers.ollama.model` in that file to match the installed model, such as
-`llama3.2:3b`. The example location is a convention, not an automatically
-discovered path: set
-`AE_CONFIG_FILE` to the absolute path of the file you want the controller to
-read. Keep it set when restarting the controller. Existing files are not
-overwritten by the copy command.
+`llama3.2:3b`. The controller automatically reads
+`~/.config/adam-eve/config.json`. To use a different file, set `AE_CONFIG_FILE`
+to its absolute path and keep it set when restarting the controller. Existing
+files are not overwritten by the copy command.
 
 Then build and provision an identity:
 
 ```sh
 scripts/build
-export AE_DATA_ROOT="$HOME/.local/share/adam-eve"
-export AE_LLM_TIMEOUT_MS=120000
-scripts/publish_seed --data-root "$AE_DATA_ROOT"
+scripts/publish_seed
 scripts/ae
 ```
 
-Alternatively, leave `AE_CONFIG_FILE` unset and set `AE_LLM_MODEL` to the
+Alternatively, when the default config file is absent, leave `AE_CONFIG_FILE`
+unset and set `AE_LLM_MODEL` to the
 installed model name to use the single default Ollama profile. `AE_LLM_MODEL`
 does not override a model in the configured profile map. See [LLM providers](PROVIDERS.md)
 for API-key providers and other configuration options.
+
+Both the publisher and controller default to `~/.local/share/adam-eve`.
+Set `AE_DATA_ROOT` to override this path; the publisher also accepts
+`--data-root`, which takes precedence over the environment variable. The provider
+timeout defaults to 120000 ms and can be overridden with `AE_LLM_TIMEOUT_MS`.
 
 The data root must be an absolute, private directory outside the checkout. The
 publisher creates it with mode 0700 if needed. Publish once per identity;
@@ -104,6 +106,7 @@ Prepare a **trusted, manually authored** Git patch against the retained active
 source and publish a different artifact:
 
 ```sh
+export AE_DATA_ROOT="${AE_DATA_ROOT:-$HOME/.local/share/adam-eve}"
 scripts/publish_candidate --data-root "$AE_DATA_ROOT" \
   --patch /absolute/path/manual-change.patch --objective 'Describe the change'
 ```
@@ -149,11 +152,11 @@ requests recovery after the cause is fixed.
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `AE_DATA_ROOT` | Required | Private persistent storage outside the checkout |
+| `AE_DATA_ROOT` | `$HOME/.local/share/adam-eve` | Private persistent storage outside the checkout |
 | `AE_LLM_MODEL` | Required without profiles | Ollama model name |
 | `AE_LLM_URL` | `http://127.0.0.1:11434/api/chat` | Ollama endpoint; see [LLM providers](PROVIDERS.md) |
-| `AE_CONFIG_FILE` | Unset | JSON provider and Telegram configuration |
-| `AE_LLM_TIMEOUT_MS` | `30000` | Conversation provider timeout, 100–300000 ms |
+| `AE_CONFIG_FILE` | `$HOME/.config/adam-eve/config.json` | JSON provider and Telegram configuration |
+| `AE_LLM_TIMEOUT_MS` | `120000` | Conversation provider timeout, 100–300000 ms |
 | `AE_EVOLUTION_LLM_TIMEOUT_MS` | Conversation timeout | Authoring timeout, 100–3600000 ms, capped by the job deadline |
 | `AE_RUNTIME_START_TIMEOUT_MS` | `5000` | Runtime startup deadline, 100–30000 ms |
 | `AE_LLM_MAX_TOKENS` | `512` | Requested output limit, 1–8192 |

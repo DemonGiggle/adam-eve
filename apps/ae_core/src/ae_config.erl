@@ -3,14 +3,17 @@
 -export([load/0]).
 
 load() ->
-    Root = required("AE_DATA_ROOT"),
+    Root = case os:getenv("AE_DATA_ROOT") of
+        false -> filename:join([required("HOME"), ".local", "share", "adam-eve"]);
+        Value -> Value
+    end,
     true = filename:pathtype(Root) =:= absolute,
     {ok, Info} = file:read_link_info(Root),
-    %% The data root must have been provisioned by publish_seed, never guessed.
+    %% The selected data root must have been provisioned by publish_seed.
     directory = Info#file_info.type,
     0 = Info#file_info.mode band 8#077,
     Providers = ae_provider_config:load(),
-    LlmTimeout = integer_env("AE_LLM_TIMEOUT_MS", 30000, 100, 300000),
+    LlmTimeout = integer_env("AE_LLM_TIMEOUT_MS", 120000, 100, 300000),
     maps:merge(maps:merge(isolation(), Providers), #{root => Root,
       llm_timeout => LlmTimeout, evolution_llm_timeout => evolution_llm_timeout(LlmTimeout),
       runtime_start_timeout => integer_env("AE_RUNTIME_START_TIMEOUT_MS", 5000, 100, 30000),

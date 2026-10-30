@@ -13,10 +13,11 @@ controller_sources_do_not_launch_python_helpers_test() ->
 explicit_removed_sandbox_is_not_silently_run_on_host_test() ->
     Root = filename:join("/tmp", "ae-host-config-" ++ integer_to_list(erlang:unique_integer([positive]))),
     ok = file:make_dir(Root), ok = file:change_mode(Root, 8#700),
-    Names = ["AE_DATA_ROOT", "AE_LLM_MODEL", "AE_CONFIG_FILE", "AE_PROVIDERS_JSON", "AE_LLM_PROVIDER", "AE_RUNTIME_ISOLATION"],
+    Names = ["HOME", "AE_DATA_ROOT", "AE_LLM_MODEL", "AE_CONFIG_FILE", "AE_PROVIDERS_JSON", "AE_LLM_PROVIDER", "AE_RUNTIME_ISOLATION"],
     Before = [{Name, os:getenv(Name)} || Name <- Names],
     try
         [os:unsetenv(Name) || Name <- Names],
+        os:putenv("HOME", Root),
         os:putenv("AE_DATA_ROOT", Root), os:putenv("AE_LLM_MODEL", "fixture"),
         host = maps:get(runtime_isolation, ae_config:load()),
         os:putenv("AE_RUNTIME_ISOLATION", "development"),

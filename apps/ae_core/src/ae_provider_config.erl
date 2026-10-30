@@ -2,11 +2,7 @@
 -export([load/0, normalize/2, public/1]).
 
 load() ->
-    Document = case os:getenv("AE_CONFIG_FILE") of
-        false -> #{};
-        Path -> {ok, Data} = file:read_file(Path), true = byte_size(Data) =< 1048576,
-            jsx:decode(Data, [return_maps, strict])
-    end,
+    Document = document(),
     Profiles = case os:getenv("AE_PROVIDERS_JSON") of
         false -> maps:get(<<"providers">>, Document, #{});
         Value -> jsx:decode(list_to_binary(Value), [return_maps, strict])
@@ -24,6 +20,25 @@ load() ->
         model => maps:get(model, Selected), url => maps:get(url, Selected),
         telegram_config => maps:get(<<"telegram">>, Document, #{}),
         evolution_provider => env("AE_EVOLUTION_PROVIDER", maps:get(<<"evolution_provider">>, Document, Default))}.
+
+document() ->
+    case os:getenv("AE_CONFIG_FILE") of
+        false ->
+            case os:getenv("HOME") of
+                false -> #{};
+                Home -> read_document(filename:join([Home, ".config", "adam-eve", "config.json"]), true)
+            end;
+        Path -> read_document(Path, false)
+    end.
+
+read_document(Path, Optional) ->
+    case file:read_file(Path) of
+        {error, enoent} when Optional -> #{};
+        Result ->
+            {ok, Data} = Result,
+            true = byte_size(Data) =< 1048576,
+            jsx:decode(Data, [return_maps, strict])
+    end.
 
 normalize(Name, Raw) ->
     true = text(Name, 64) andalso is_map(Raw),
