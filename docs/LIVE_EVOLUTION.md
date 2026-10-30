@@ -6,6 +6,12 @@ source, executable releases, scorecards and explicit test-operator approvals.
 It does not use the fixture provider and is excluded from `scripts/test`.
 Model errors fail the demonstration; they are not replaced with canned patches.
 
+The 2026-10-30 host run passed with the configured `qwen3.8:27b` model: both
+generations passed on their first attempt, completed observation and survived
+full restart. The [acceptance record](evidence/2026-10-30-host-v0.1.json) binds
+model, source, artifacts and independent evaluation results. A subsequent local
+backup/restore drill retained both acknowledged replies; see [STATUS.md](STATUS.md).
+
 The host must satisfy the namespace/seccomp requirements in
 [ISOLATION.md](ISOLATION.md). Complete aggregate resource enforcement is deferred
 to v0.2; the v0.1 process profile needs neither delegated cgroups nor a VM.
@@ -57,10 +63,12 @@ ledger, and protected generation refs in the data root. Set
 All generated execution still requires the restricted backend.
 
 The demo is a controlled test environment with synthetic objectives. Its explicit
-approval calls do not enable policy-based production promotion. Candidate crash
-and rollback checks remain in the restricted authoring integration; full fault
-coverage, retention/cleanup and environment backup objectives require separate
-evidence before claiming the complete MVP.
+approval calls do not enable policy-based production promotion. Restricted
+authoring tests cover candidate crash/rollback of acknowledged work; the separate
+controller crash harness covers nine durable boundaries. Retention and recovery
+tests cover publication/cleanup interruptions and declared local backup objectives.
+The live run and these failure tests establish different parts of acceptance;
+neither implies general model quality or off-host recovery coverage.
 
 ## Networkless validation VM
 

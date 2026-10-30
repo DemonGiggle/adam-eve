@@ -7,8 +7,10 @@ LLM broker capabilities are available only during that exchange, bound to its
 job, generation, authenticated runtime and epoch. The supervised `ae_evolution`
 state machine drives authoring, bounded repair, build, independent evaluation,
 and staging, then waits for explicit operator approval. Evolution is disabled by
-default. Publication/retention recovery coverage and successive live-model
-generations remain required before the Phase 2 exit criterion can be claimed.
+default. The host Phase 2 acceptance run completed two successive live-model
+generations, full restart and a generated-identity backup/restore drill. Publication,
+partial collection and deployment boundaries have SIGKILL recovery coverage;
+see [STATUS.md](STATUS.md) and the [acceptance record](evidence/2026-10-30-host-v0.1.json).
 The fixed reproducible seed recipe is available separately; see [BUILD.md](BUILD.md).
 That guide also describes the supervised isolated builder, durable execution
 leases, and the gate that keeps its unevaluated output out of production.

@@ -1,0 +1,189 @@
+{
+  "controller_revision": "cac77f89bb1562eb97cb99305775dd9c7be5ad59",
+  "date": "2026-10-30",
+  "fault_test_revision": "01b04c68b579f335d8257f7a1ec8b0df626dd859",
+  "full_restart": {
+    "acknowledged_turns_replayed": 2,
+    "artifact_digest": "f36107699ac4b2a66b2f45274085c634937197d95add1d13df59f8363b87cd16",
+    "epoch": 5,
+    "slot": "adam",
+    "verified": true
+  },
+  "generations": [
+    {
+      "artifact_digest": "2ed652aba4b7c55a219c58147c39afa6414879b37b39a38d5c89adb53a824b58",
+      "attempts": 1,
+      "authored_paths": [
+        "apps/ae_seed/src/seed_agent.erl"
+      ],
+      "authoring_input_tokens": 14294,
+      "authoring_output_tokens": 1304,
+      "base_artifact_digest": "db3da49f9822e83393d43c188213f7b502261b575aa255c98e270415bacc6a1e",
+      "baseline_objective": {
+        "passed": 0,
+        "rate_ppm": 0,
+        "total": 2,
+        "wilson95_ppm": [
+          0,
+          657620
+        ]
+      },
+      "candidate_all_cases": {
+        "passed": 6,
+        "rate_ppm": 1000000,
+        "total": 6,
+        "wilson95_ppm": [
+          609665,
+          1000000
+        ]
+      },
+      "candidate_objective": {
+        "passed": 2,
+        "rate_ppm": 1000000,
+        "total": 2,
+        "wilson95_ppm": [
+          342380,
+          1000000
+        ]
+      },
+      "candidate_required_failed": 0,
+      "configuration_hash": "4de5d03a3b9d14aeb4d3d4ffd68e6435f7db887f0b913218ddf779d474ae0e0c",
+      "evaluation_digest": "de2f14a37c31a6b2525f36d213909ab56b8ca9b97deba799ec67e5252afdae07",
+      "gates": {
+        "baseline_contract": true,
+        "candidate_contract": true,
+        "candidate_tests": true,
+        "isolation": true,
+        "rollback_restore": true
+      },
+      "job_id": "15bcd16d266c6f7f1ab8a2d78237b9f4acd973c0d536688460ef31b2c7cf91df",
+      "llm_calls": 3,
+      "model_replacements_match_retained_source": true,
+      "model_response_sha256": "890b936f9f389a0389282b008f42935a0cdf620599ade8b661bcf19fb6f76cea",
+      "patch_hash": "93fe57f9e850970cc6217ddbbc152b6e607d29210480c75bd100315bf94e0c0c",
+      "policy_hash": "142d4e2c1a65610ab038142bd5ae1c43345cc65104b17fdef8d9bf7ad1160195",
+      "promoted_epoch": 2,
+      "promoted_slot": "eve",
+      "reserved_cost_microunits": 0,
+      "reserved_tokens": 98304,
+      "source_revision": "e5bfb71e46152bcad8a475ebe5829b97159d24d8",
+      "source_tree": "cb16c592b96fab297887a8c0ee5bb1d7f793456a",
+      "status": "completed"
+    },
+    {
+      "artifact_digest": "f36107699ac4b2a66b2f45274085c634937197d95add1d13df59f8363b87cd16",
+      "attempts": 1,
+      "authored_paths": [
+        "apps/ae_seed/src/seed_agent.erl"
+      ],
+      "authoring_input_tokens": 15720,
+      "authoring_output_tokens": 727,
+      "base_artifact_digest": "2ed652aba4b7c55a219c58147c39afa6414879b37b39a38d5c89adb53a824b58",
+      "baseline_objective": {
+        "passed": 0,
+        "rate_ppm": 0,
+        "total": 2,
+        "wilson95_ppm": [
+          0,
+          657620
+        ]
+      },
+      "candidate_all_cases": {
+        "passed": 8,
+        "rate_ppm": 1000000,
+        "total": 8,
+        "wilson95_ppm": [
+          675592,
+          1000000
+        ]
+      },
+      "candidate_objective": {
+        "passed": 2,
+        "rate_ppm": 1000000,
+        "total": 2,
+        "wilson95_ppm": [
+          342380,
+          1000000
+        ]
+      },
+      "candidate_required_failed": 0,
+      "configuration_hash": "6e1c7fdd070984bcc9be05664e317356e10e459d139eb7f5531a58ce3e927526",
+      "evaluation_digest": "0fc8cba64e024d10e8ea3beb3373d4c00aed87b45ffb821ee06810285aeb089e",
+      "gates": {
+        "baseline_contract": true,
+        "candidate_contract": true,
+        "candidate_tests": true,
+        "isolation": true,
+        "rollback_restore": true
+      },
+      "job_id": "b7bc7308a1b844815749d0c6d0a0a8e25712cb505ef88abfbd54b32a515bce5e",
+      "llm_calls": 3,
+      "model_replacements_match_retained_source": true,
+      "model_response_sha256": "fe9e7cd7af8a1ea1f98cfa15175560399f2766e90d670b4a4af42a8d9d2d54d7",
+      "patch_hash": "4f004efea212a5a574afc84bc5a0631cef65edd9ec7f418bf448eb4916e547dd",
+      "policy_hash": "6ac4d82c8f9ba25ded674d436708a2e041d1b97766f8ce32b1a2c0a2a6c548a2",
+      "promoted_epoch": 4,
+      "promoted_slot": "adam",
+      "reserved_cost_microunits": 0,
+      "reserved_tokens": 98304,
+      "source_revision": "8103841fe2c9ddb72b6c3a1834264ba87022f84f",
+      "source_tree": "3f38f505ea275f40d24b6f357af586c49b80aee9",
+      "status": "completed"
+    }
+  ],
+  "host_suite": {
+    "build_and_cleanup_tests": 15,
+    "command": "scripts/test",
+    "core_eunit_tests": 37,
+    "delegated_cgroup_tests_skipped": 4,
+    "evaluation_tests": 9,
+    "exit_code": 0,
+    "integration_suites": [
+      "phase0",
+      "phase1",
+      "authoring",
+      "evolution_crash",
+      "evolution_control",
+      "storage",
+      "recovery",
+      "memory"
+    ],
+    "sandbox_tests_run": 8,
+    "seed_eunit_tests": 10
+  },
+  "inference": {
+    "adapter": "ollama",
+    "model": "qwen3.8:27b",
+    "model_digest": "22130167c4c20e20c7b71454612966ca8e8171e9b3cc8ab6ce8aa6cbfec79643",
+    "service_version": "0.40.6",
+    "transport": "configured GPU service through unchanged loopback TCP forwarding"
+  },
+  "isolation": "bubblewrap namespaces and seccomp",
+  "recovery": {
+    "acknowledged_turns_replayed": 2,
+    "backup_ids": [
+      "cf91363db5751db3f5932bbcc0ec867a3a6026024ac6c4b57f324fcee61e80c5",
+      "a01e3a17d680df407b0b0c5caa9abd482e1523ac480aabde81b3f52898c69df2"
+    ],
+    "declared_rpo_ms": 60000,
+    "declared_rto_ms": 60000,
+    "failure_domain": "same local acceptance disk; no disk or host-loss coverage",
+    "observed_rpo_ms": 67,
+    "service_rto_ms": 737
+  },
+  "resource_limits_mode": "process",
+  "schema_version": 1,
+  "scope": "Synthetic formatting objectives; deterministic independent mock-tool evaluations; explicit test-operator approvals. This demonstrates the v0.1 mechanism, not general model quality, host/disk-loss recovery, or v0.2 aggregate limits.",
+  "spec_version": "0.1 revision 3",
+  "whole_controller_crash_boundaries": [
+    "unknown_authoring_call",
+    "awaiting_approval",
+    "observation_after_acknowledged_reply",
+    "approved",
+    "quiescing",
+    "promoting",
+    "routing_commit_before_activation",
+    "rollback_intent",
+    "rollback_commit_before_activation"
+  ]
+}

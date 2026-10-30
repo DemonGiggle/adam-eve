@@ -2,19 +2,19 @@
 
 An Erlang/OTP agent with a trusted controller and replaceable Adam/Eve runtimes.
 The architecture and planned milestones are in [docs/SPEC.md](docs/SPEC.md).
-The current milestone and acceptance gaps are tracked in [docs/STATUS.md](docs/STATUS.md).
+Acceptance evidence and operational scope are tracked in [docs/STATUS.md](docs/STATUS.md).
 Versioned facts, preferences and summaries, their source references, and the
 operator memory commands are described in [docs/MEMORY.md](docs/MEMORY.md).
 
-The development implementation now supports Phase 1: a trusted OTP controller
-serves isolated Adam/Eve BEAM processes, stages manually built candidates, and
+The v0.1 implementation supports controlled self-evolution: a trusted OTP controller
+serves isolated Adam/Eve BEAM processes, stages built candidates, and
 switches between them with durable approval, checkpoints, observation, and
 rollback. The seed calls a configured local Ollama model through a broker;
 conversation and pending turns survive runtime replacement. Evolution is disabled
 by default and requires explicit limits and restricted execution to enable.
 
-Phase 2 foundations now include a durable bounded authoring ledger, scoped
-paginated source access, a protected patch policy, and an optional restricted
+Phase 2 includes a durable bounded authoring ledger, scoped
+paginated source access, a protected patch policy, and a restricted
 runtime backend. The seed can read scoped source and submit budgeted structured
 LLM patches through an internal controller-authorized authoring exchange. The
 isolated builder now records execution budgets and retains generated releases
@@ -26,7 +26,10 @@ rollback. Persistent disable keeps ordinary service available. See
 available through the operator commands in [docs/RECOVERY.md](docs/RECOVERY.md).
 See [docs/EVOLUTION.md](docs/EVOLUTION.md) and
 [docs/ISOLATION.md](docs/ISOLATION.md) for implemented behavior, required host
-configuration, and the remaining verification gaps.
+configuration and operational scope. A real-model host acceptance run completed
+two successive independently evaluated and explicitly approved generations,
+full restart and a backup/restore drill; see the
+[recorded evidence](docs/evidence/2026-10-30-host-v0.1.json).
 
 Development requirements: Erlang/OTP 24+, rebar3, a C compiler, make, and SQLite
 development headers, Git, and Python 3. Dependencies are pinned in the controller
@@ -217,13 +220,15 @@ profile now runs builds, independent evaluation, recovery and generated
 promotion/rollback directly on the host; complete aggregate resource enforcement
 is deferred to v0.2. An orchestrated variant
 repairs a real compiler failure, reaches explicit approval, and verifies persistent
-disable/re-enable across restart. Successive live-LLM-authored generations,
-the full restricted failure matrix, retention cleanup, and off-host recovery
-validation remain unfinished. The escript retains compiled code and dependencies;
+disable/re-enable across restart. Nine controller crash boundaries, resumable
+partial-publication collection, and local backup/restore are tested. The escript retains compiled code and dependencies;
 its recorded host ERTS must remain installed. No live-model quality claim is made
 by the fixture tests.
 
 The opt-in [live-model demonstration](docs/LIVE_EVOLUTION.md) runs two successive
 authoring objectives with a real local Ollama model and the restricted backend,
-retaining review and restart evidence. It is separate from the fixture suite;
-its presence does not establish that the live-model acceptance criterion passes.
+retaining review and restart evidence. The 2026-10-30 run passed with
+`qwen3.8:27b`; its second change preserves the first as a required regression.
+Complete aggregate resource enforcement belongs to v0.2. Automatic historical
+deletion, uncertain workspace collection and off-host recovery configuration
+remain outside the demonstrated local scope.

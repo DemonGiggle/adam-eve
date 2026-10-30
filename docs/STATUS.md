@@ -3,8 +3,10 @@
 This report tracks the current implementation against SPEC v0.1 revision 3.
 It describes implemented behavior
 and existing test evidence; it does not change the requirements in [SPEC.md](SPEC.md).
-The MVP is not complete. Evolution is disabled by default and can be explicitly
-enabled only with complete limits and the restricted runtime backend.
+The v0.1 acceptance criteria are demonstrated on the Linux host with the explicit
+Bubblewrap `process` profile. Evolution is disabled by default and can be
+explicitly enabled only with complete limits, retention policy and restricted
+execution. See the [2026-10-30 acceptance record](evidence/2026-10-30-host-v0.1.json).
 
 The operator has deferred complete aggregate kernel CPU/memory/process
 enforcement to v0.2. Namespace/filesystem/network isolation, broker fencing,
@@ -17,13 +19,31 @@ v0.2 evidence rather than an MVP completion gate.
 
 | SPEC milestone | Progress | Remaining exit evidence |
 |---|---|---|
-| Phase 0: reliable seed | Implemented and integration-tested with a fixture provider: CLI, brokered LLM calls, durable conversations, retained source/releases, process restart. | A live model is not required by the automated suite; no live-model quality claim is established. |
+| Phase 0: reliable seed | CLI, brokered LLM calls, durable conversations, retained source/releases and process restart pass fixture tests and the real-model run. | Controlled local acceptance. |
 | Phase 1: dual-slot handoff | Implemented and integration-tested with manually authored generations: Adam → Eve → Adam, explicit approval, fencing, checkpoint/replay, observation, crash recovery, and rollback of acknowledged work. The full suite also passes directly on the host with both slots using Bubblewrap/process limits. | Complete aggregate resource enforcement belongs to v0.2. |
-| Phase 2: controlled self-evolution | Partial. The evolution state machine and CLI connect authoring/repair, isolated builds/evaluation, job-bound manual approval, promotion/rollback, persistent disable, and local backup/restore. Publication has process-kill coverage. | Retention/cleanup recovery, the restricted restart/failure matrix, and two successive live-LLM-authored promotions. |
+| Phase 2: controlled self-evolution | Two real LLM-authored generations pass independent gates, explicit approval, observation and full restart. Retention, publication/cleanup interruption, nine controller crash boundaries and local backup/restore are tested. | Synthetic objectives and explicit test-operator approval; no general model-quality or host-loss recovery claim. |
 | Phase 3: autonomous low-risk evolution | Not implemented. | Scheduled triggers and policy-authorized promotion are later work. |
 | Phase 4: advanced capabilities | Not implemented. | Explicitly outside MVP scope. |
 
-## Phase 2 evidence and gaps
+## Phase 2 evidence
+
+The configured `qwen3.8:27b` Ollama model authored both accepted changes. The first
+formats initial `hello:` as `Hello, `; the second adds `bye:` → `Goodbye, ` while
+preserving the first behavior as a required regression. Each used one attempt
+and three model calls. Both objective comparisons improved from 0/2 baseline to
+2/2 candidate; every independent gate passed. The small samples establish these
+deterministic behaviors, not general model coding quality.
+
+Promotion completed Adam → Eve at epoch 2, then Eve → Adam at epoch 4. The exact
+final executable restarted at epoch 5 and replayed both acknowledged real-provider
+replies without rebuilding or another provider call. Source ancestry, protected
+refs, executable digests, proposals, scorecards and approvals are retained at
+`/home/gigo/.local/share/adam-eve/acceptance-20261030` on the acceptance host.
+The portable [acceptance record](evidence/2026-10-30-host-v0.1.json) binds their
+identities. A subsequent consistent-backup/fenced-restore drill on this generated
+identity replayed the same replies: observed RPO 67 ms and service RTO 737 ms
+against the declared 60000 ms local-disk objectives. Two verified backup sets
+are retained. This declares no disk/host-loss coverage.
 
 The authoring integration runs a real seed process over authenticated Unix IPC
 with a fixture HTTP provider. It verifies paginated source access, structured
@@ -54,8 +74,9 @@ approvals, never reissues unknown authoring, and rolls back an unobserved candid
 without losing its reply. A test-only store driver also verifies whole-controller
 death after approval, quiescing, promotion preparation, routing commit before
 activation, rollback intent, and rollback commit before activation, following the
-real generated build/evaluation/staging gates. Successive live-authored generations
-remain pending.
+real generated build/evaluation/staging gates. The separate live run establishes
+successive actual model-authored generations; fixture tests establish failure
+recovery and invariant coverage.
 
 Generated releases can now receive a durable independent scorecard through a
 supervised evaluator. Digest-only manual staging still rejects them with
@@ -73,20 +94,20 @@ the Phase 2 self-evolution demonstration.
 
 | Criterion | Current evidence / remaining work |
 |---|---|
-| 1. Continuing identity | Verified across manual generations and controller/runtime restart. Generated-generation acceptance remains pending. |
+| 1. Continuing identity | Manual and live generated generations retain identity, routing, conversations and exact code across full restart. |
 | 2. Active-epoch effects only | Transactional runtime/epoch checks and stale-request rejection are tested. |
 | 3. Conversation and pending tasks survive | Restart/handoff tests retain turns and tool-call reservations/results. Versioned facts, preferences and summaries with source events survive context eviction, restart, handoff, rollback and backup restore; turn admission pins the memory revision. Richer task workflows remain later work. |
-| 4. Isolated candidate builds/tests | Restricted builds and independent comparisons run without production store/tool access. Full lifecycle acceptance remains pending. |
+| 4. Isolated candidate builds/tests | Native Bubblewrap builds/evaluations and the live lifecycle run without production store/tool access or credentials mounted in candidates. |
 | 5. Failed gates and rollback | Manual failures and generated score/approval mismatches preserve the active generation. Actual restricted generated-candidate observation failure rolls back acknowledged work. |
-| 6. Durable promotions/rollbacks | Manual and generated deployments update routing, audit and linked evolution records transactionally. Full orchestration/restart coverage remains pending. |
-| 7. AI-authored patch through promotion | Not met for a live LLM. A fixture-authored behavioral patch is compiled, independently tested, explicitly approved, promoted, and rolled back. |
+| 6. Durable promotions/rollbacks | Routing, audit and linked jobs commit transactionally; nine whole-controller crash boundaries recover, including routing and rollback commits before activation. |
+| 7. AI-authored patch through promotion | Both real Ollama-authored patches compiled, passed independent gates and explicit approval, promoted and completed observation. |
 | 8. Artifact provenance and evaluation | Parent/source/objective/job/attempt/build provenance and bound scorecards are linked through generated deployment. |
 | 9. Controller survives agent failure | Bounded runtime recovery and degraded controller inspection are tested. |
 | 10. Disable evolution, keep serving | The restricted orchestrated test verifies enabled → disabled → restart → explicit re-enable, with ordinary service while disabled. Store tests verify disabled/cancelled approvals fail closed and an observing candidate closes admission until rollback. |
-| 11. Successive LLM-authored behavior | Not met. Manual cumulative lineage is tested; two live-LLM-authored behavioral changes and independent regression evidence remain pending. |
-| 12. Retained, verified code/releases | Exact executable retention, protected Git refs, integrity checks, restart, six candidate-publication SIGKILL boundaries, explicit preservation policy and storage admission before spending are tested. Partial-publication collection preserves every complete release/ref and resumes after SIGKILL. Interrupted workspace ownership and physical storage-loss recovery still require separate work/evidence. |
-| 13. Bound approvals and durable budgets | Manual/generated bindings, reservations across restart, compiler repair without budget reset, durable promotion/rollback intents, and disable/cancellation guards are tested. Full orchestrator failure/restart coverage remains pending. |
-| 14. Preserve acknowledged work; recover backups | Manual/generated rollback preserves committed replies/results. Local consistent-backup/fenced-restore drills pass; environment-specific off-host recovery validation remains pending. |
+| 11. Successive LLM-authored behavior | The second live job inherits the first promoted source, adds its objective and passes the first behavior as a required regression. |
+| 12. Retained, verified code/releases | Exact executable retention, protected Git refs, integrity checks, restart, six candidate-publication SIGKILL boundaries, explicit preservation policy and storage admission before spending are tested. Partial-publication collection preserves every complete release/ref and resumes after SIGKILL. Uncertain workspaces are preserved. |
+| 13. Bound approvals and durable budgets | Binding mismatches and stale approvals are refused; deduplication, unknown calls, reservations and bounded compiler repair survive restart. Nine whole-controller crash boundaries retain reservations. |
+| 14. Preserve acknowledged work; recover backups | Candidate/controller crash and rollback preserve committed replies/results. Fixture and actual generated identities pass consistent-backup/fenced-restore drills within their declared local objectives. |
 
 ## LLM provider
 
@@ -96,15 +117,26 @@ the broker owns the endpoint and enforces time/output limits, with durable token
 and cost reservations for authoring. There are no OpenAI or Anthropic adapters.
 Automated checks use a fixture provider rather than an installed live model.
 An opt-in real-model acceptance harness is documented in
-[LIVE_EVOLUTION.md](LIVE_EVOLUTION.md). A local Ollama preflight has succeeded;
-live authoring attempts have reached source retrieval and proposal submission,
-but none has passed all gates. A 7B model's malformed diffs were rejected before
-building; a configured 27B model submitted valid exact-text edits but omitted a
-required helper through its bounded compiler-repair attempts. Edit actions now
-submit atomic replacement batches with explicit completeness instructions.
-Agent-assembled diffs use complete pinned source reads; host fixtures verify compilation, independent
-evaluation, explicit promotion and rollback through this path. Successful
-successive live-model generations remain unproven.
+[LIVE_EVOLUTION.md](LIVE_EVOLUTION.md). The recorded host run passed both
+successive generations with `qwen3.8:27b`. The model supplied every replacement;
+the seed assembled diffs from complete pinned source reads. No handwritten
+replacement was injected into either accepted job. Earlier failed runs remain
+separate evidence and their reservations were not refunded.
+
+## Operational scope
+
+The native suite passes core/seed EUnit, isolated build/evaluation, real-process
+integration, namespace/seccomp and recovery checks. Four delegated-cgroup tests
+skip on this host and target the deferred v0.2 aggregate enforcement profile.
+Selecting that profile still fails closed without delegation.
+
+v0.1 preserves all complete versions, rejected attempts and audit history.
+Collection removes only recognized recovered partial publications; interrupted
+workspaces with uncertain ownership are preserved and disk pressure rejects
+evolution. Historical deletion, automatic backup expiry, scheduled evolution,
+advanced retrieval/task workflows and distributed failover remain later work.
+Production operators supply their own limits, objectives, backup schedule/storage
+and restore evidence for the required failure domain.
 
 Implementation details and test entry points are in [EVOLUTION.md](EVOLUTION.md),
 [BUILD.md](BUILD.md), [ISOLATION.md](ISOLATION.md), [MEMORY.md](MEMORY.md), and [RECOVERY.md](RECOVERY.md).
