@@ -12,12 +12,14 @@
       "adapter": "openai",
       "model": "your-api-model",
       "api_key_env": "OPENAI_API_KEY",
+      "api_key_path": "",
       "wire": "responses"
     },
     "opencode-go": {
       "adapter": "opencode-go",
       "model": "your-go-model",
-      "api_key_env": "OPENCODE_GO_API_KEY"
+      "api_key_env": "OPENCODE_GO_API_KEY",
+      "api_key_path": ""
     }
   },
   "telegram": {

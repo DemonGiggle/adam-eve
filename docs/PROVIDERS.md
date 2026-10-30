@@ -32,7 +32,23 @@ Existing `AE_LLM_MODEL` and `AE_LLM_URL` configuration still creates a single
 Ollama profile when no profile map is supplied. An Ollama URL can be its base URL
 or the complete `/api/chat` endpoint.
 
-Use `api_key_env` or `api_key_path`, with at most one configured. A key file must
+Use `api_key_env` or `api_key_path`, with at most one nonempty. The example
+configuration includes an empty `api_key_path` for each API provider. To use a
+file, clear or remove `api_key_env` and set `api_key_path` to its absolute path:
+
+```json
+{
+  "adapter": "openai",
+  "model": "your-api-model",
+  "api_key_env": "",
+  "api_key_path": "/home/your-user/.config/adam-eve/openai.key",
+  "wire": "responses"
+}
+```
+
+Paths are literal: `~` and environment variables such as `$HOME` are not expanded.
+Store only the API key in the file and set its permissions with `chmod 600`.
+A key file must
 be an absolute regular file owned by the controller user, mode 0600 or 0400,
 without symlink components or hard links. File reads use the opened descriptor
 and bounded content; multiline bearer values are refused. Keys are resolved at

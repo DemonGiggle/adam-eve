@@ -65,6 +65,9 @@ with a model available from that provider:
   model. [Getting started](docs/OPERATIONS.md) includes a local setup example.
 
 For example, export an API key with `export OPENAI_API_KEY='your-api-key'`.
+To read a key from a file instead, clear the profile's `api_key_env` and set
+`api_key_path` to the file's absolute path (mode 0600 or 0400).
+See [LLM providers](docs/PROVIDERS.md) for an example.
 The controller automatically reads `~/.config/adam-eve/config.json`. Set
 `AE_CONFIG_FILE` only to use a different file, using an absolute path.
 The copy command preserves an existing config file.
