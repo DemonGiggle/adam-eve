@@ -1,6 +1,6 @@
 -module(ae_router).
 -behaviour(gen_server).
--export([start_link/1, turn/3, restart/0, status/0, promote/2, rollback/2, check/1, restore_ready/2, author/1, cancel_author/1]).
+-export([start_link/1, turn/3, restart/0, status/0, promote/2, rollback/2, check/1, restore_ready/2, author/1, cancel_author/1, cancel_request/1]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
 
 start_link(Config) -> gen_server:start_link({local, ?MODULE}, ?MODULE, Config, []).
@@ -19,6 +19,7 @@ author(Id) ->
         _ -> 10000 end,
     gen_server:call(?MODULE, {author, Id}, Timeout).
 cancel_author(Id) -> gen_server:call(?MODULE, {cancel_author, Id}, 65000).
+cancel_request(Id) -> gen_server:call(?MODULE, {cancel_request, Id}, 15000).
 
 init(#{root := Root} = Config) ->
     ok = ae_runtime_sup:stop_all(),
@@ -90,6 +91,14 @@ handle_call({cancel_author, Id}, _, #{inflight := #{request := Id, mode := autho
     try {reply, ok, boot_current(Stopped)}
     catch _:_ -> {reply, {error, recovery_failed}, Stopped} end;
 handle_call({cancel_author, _}, _, State) -> {reply, ok, State};
+handle_call({cancel_request, Id}, _, State) ->
+    case maps:get(inflight, State) of
+        #{request := Id, mode := author} -> {reply, {error, invalid_turn}, State};
+        _ ->
+            Reply = ae_store:cancel_turn(Id),
+            case Reply of ok -> ae_tool_broker:cancel_request(Id); _ -> ok end,
+            {reply, Reply, State}
+    end;
 handle_call({restore_ready, BackupId, Origin}, _, State) ->
     Reply = case maps:get(runtime, State) of
         undefined -> {error, runtime_unavailable};

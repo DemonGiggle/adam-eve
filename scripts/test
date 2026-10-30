@@ -9,6 +9,8 @@ python3 -m unittest discover -s test/evaluation -v
 python3 test/integration/phase0.py
 python3 test/integration/providers.py
 python3 test/integration/sessions.py
+python3 test/integration/cancellation.py
+python3 test/integration/telegram.py
 python3 test/integration/phase1.py
 python3 test/integration/authoring.py
 python3 test/integration/evolution_crash.py

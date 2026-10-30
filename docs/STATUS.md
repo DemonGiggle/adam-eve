@@ -111,10 +111,9 @@ the Phase 2 self-evolution demonstration.
 
 ## LLM provider
 
-Ollama is the implemented provider adapter for conversation and structured source
-authoring. The operator configures the installed model through `AE_LLM_MODEL`;
-the broker owns the endpoint and enforces time/output limits, with durable token
-and cost reservations for authoring. There are no OpenAI or Anthropic adapters.
+Ollama, OpenAI-compatible, OpenCode Go and Anthropic API adapters support
+conversation and bounded authoring. Configured profiles, credentials, model
+selection and accounting are described in [PROVIDERS.md](PROVIDERS.md).
 Automated checks use a fixture provider rather than an installed live model.
 An opt-in real-model acceptance harness is documented in
 [LIVE_EVOLUTION.md](LIVE_EVOLUTION.md). The recorded host run passed both

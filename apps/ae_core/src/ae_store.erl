@@ -9,7 +9,7 @@
          preparing_promotion/2, starting_rollback/2,
          active_deployment/0, promote/4, rollback/5, complete/2, recover_handoff/0,
          activate_checkpoint/3, runtime_failed/2, evolution/1, recovery/0, verify_recovery/3]).
--export([memory/1, context_snapshot/2, session/1]).
+-export([memory/1, context_snapshot/2, session/1, telegram/1]).
 
 start_link(Root) -> gen_server:start_link({local, ?MODULE}, ?MODULE, Root, []).
 boot(Manifest) -> call({boot, Manifest}).
@@ -50,6 +50,7 @@ runtime_failed(Expected, Reason) -> call({runtime_failed, Expected, Reason}).
 evolution(Operation) -> call({evolution, Operation}).
 memory(Operation) -> call({memory, Operation}).
 session(Operation) -> call({session, Operation}).
+telegram(Operation) -> call({telegram, Operation}).
 context_snapshot(Request, Limit) -> call({context_snapshot, Request, Limit}).
 recovery() -> call(recovery).
 verify_recovery(Expected, BackupId, Origin) -> call({verify_recovery, Expected, BackupId, Origin}).
@@ -64,7 +65,7 @@ init(Root) ->
     _ = sql(Db, "PRAGMA foreign_keys=ON", []),
     _ = sql(Db, "PRAGMA busy_timeout=5000", []),
     lists:foreach(fun(Statement) -> sql(Db, Statement, []) end,
-        schema() ++ ae_evolution_store:schema() ++ ae_memory:schema() ++ ae_sessions:schema()),
+        schema() ++ ae_evolution_store:schema() ++ ae_memory:schema() ++ ae_sessions:schema() ++ ae_telegram_store:schema()),
     transaction(Db, fun() ->
         ok = ae_sessions:initialize(Db),
         case route(Db) of
@@ -85,6 +86,49 @@ terminate(_, Db) -> sqlite3:close(Db).
 dispatch({evolution, Operation}, Db) -> ae_evolution_store:dispatch(Db, Operation);
 dispatch({memory, Operation}, Db) -> ae_memory:dispatch(Db, Operation);
 dispatch({session, Operation}, Db) -> ae_sessions:dispatch(Db, Operation);
+dispatch({telegram, {settings, Bot, Id, Session, Field, Value, Config}}, Db) ->
+    Preferences = maps:without([<<"context_start">>], ae_sessions:dispatch(Db, {get, Session})),
+    Text = case ae_settings:change(Preferences, Field, Value, Config) of
+        {ok, Next} ->
+            {ok, _} = ae_sessions:dispatch(Db, {set, Session, Next}),
+            {ok, Selected} = ae_llm:select(Next, Config), jsx:encode(#{<<"effective">> => ae_llm:public(Selected), <<"overrides">> => Next});
+        _ -> <<"Invalid or unconfigured setting.">> end,
+    ae_telegram_store:dispatch(Db, {finish, Bot, Id, <<"done">>, Text});
+dispatch({telegram, {cancel_topic, Bot, Id, Session, Reset}}, Db) ->
+    Pending = [{UpdateId, Entry} || {UpdateId, Entry} <- ae_telegram_store:dispatch(Db, {pending, Bot, Session}), UpdateId < Id],
+    lists:foreach(fun({UpdateId, Entry}) ->
+        ae_telegram_store:dispatch(Db, {cancel, Bot, UpdateId}),
+        dispatch({cancel_turn, maps:get(<<"request_id">>, Entry)}, Db)
+    end, Pending),
+    Text = case Reset of
+        true -> {ok, _} = ae_sessions:dispatch(Db, {reset, Session}), <<"Started a new topic conversation.">>;
+        false when Pending =:= [] -> <<"No pending request in this topic.">>;
+        false -> <<"Request cancelled.">> end,
+    ok = ae_telegram_store:dispatch(Db, {finish, Bot, Id, <<"done">>, Text}),
+    {ok, [maps:get(<<"request_id">>, E) || {_, E} <- Pending]};
+dispatch({telegram, {retry_topic, Bot, Id, Session}}, Db) ->
+    Text = case ae_telegram_store:dispatch(Db, {blocked, Bot, Session}) of
+        undefined -> <<"No failed request in this topic.">>;
+        {UpdateId, Entry} -> case dispatch({retry_turn, maps:get(<<"request_id">>, Entry)}, Db) of
+            ok -> ae_telegram_store:dispatch(Db, {requeue, Bot, UpdateId}), <<"Retry scheduled.">>;
+            _ -> <<"Request cannot be retried; use /cancel.">> end end,
+    ae_telegram_store:dispatch(Db, {finish, Bot, Id, <<"done">>, Text});
+dispatch({telegram, {forget, Bot, Id, Session}}, Db) ->
+    Prefix = ae_sessions:scope(Session), {ok, Snapshot} = ae_memory:dispatch(Db, {scoped, Prefix, null, 0, 32}),
+    case maps:get(<<"eof">>, Snapshot) of
+        false -> ae_telegram_store:dispatch(Db, {finish, Bot, Id, <<"done">>, <<"Too many memories to clear at once; use the controller CLI.">>});
+        true ->
+            Seq = ae_sql:event(Db, <<"telegram_memory_forget_requested">>, #{<<"session_id">> => Session}),
+            lists:foldl(fun(Entry, Rev) ->
+                Origin = <<"telegram-forget:", (integer_to_binary(Bot))/binary, ":", (integer_to_binary(Id))/binary, ":", (integer_to_binary(Rev))/binary>>,
+                {ok, Saved} = ae_memory:dispatch(Db, {delete, Origin, maps:get(<<"kind">>, Entry), maps:get(<<"key">>, Entry), [Seq], Rev}),
+                maps:get(<<"revision">>, Saved)
+            end, maps:get(<<"revision">>, Snapshot), maps:get(<<"entries">>, Snapshot)),
+            ae_telegram_store:dispatch(Db, {finish, Bot, Id, <<"done">>, <<"Chat memory cleared.">>})
+    end;
+dispatch({telegram, {outbox, Id, <<"sending">>}}, Db) ->
+    require_open(Db), ae_telegram_store:dispatch(Db, {outbox, Id, <<"sending">>});
+dispatch({telegram, Operation}, Db) -> ae_telegram_store:dispatch(Db, Operation);
 dispatch({context_snapshot, Request, Limit}, Db) ->
     case dispatch({context, Request, Limit}, Db) of
         Messages when is_list(Messages) ->

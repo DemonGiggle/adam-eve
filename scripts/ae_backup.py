@@ -25,6 +25,7 @@ TABLES = {"routing", "events", "turns", "tools", "tool_attempts", "artifacts",
           "evolution_proposals", "evolution_llm_calls"}
 MEMORY_TABLES = {"memory_versions", "memory_requests", "turn_memory"}
 SESSION_TABLES = {"sessions", "turn_settings"}
+TELEGRAM_TABLES = {"telegram_inbox", "telegram_outbox"}
 POLICY_KEYS = {"schedule", "minimum_copies", "rpo_ms", "rto_ms", "failure_domain",
                "disk_reserve_bytes"}
 
@@ -205,8 +206,8 @@ def verify_state(root, point):
         require(not connection.execute("PRAGMA foreign_key_check").fetchall(), "SQLite reference failure")
         tables = {r[0] for r in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
         actual = tables - {"sqlite_sequence"}
-        require(TABLES <= actual <= TABLES | MEMORY_TABLES | SESSION_TABLES, "unsupported state schema")
-        for group in (MEMORY_TABLES, SESSION_TABLES):
+        require(TABLES <= actual <= TABLES | MEMORY_TABLES | SESSION_TABLES | TELEGRAM_TABLES, "unsupported state schema")
+        for group in (MEMORY_TABLES, SESSION_TABLES, TELEGRAM_TABLES):
             require(not actual & group or group <= actual, "incomplete state schema")
         route = json.loads(connection.execute("SELECT data FROM routing WHERE id=1").fetchone()[0])
         seq = connection.execute("SELECT COALESCE(MAX(seq),0) FROM events").fetchone()[0]
@@ -214,6 +215,8 @@ def verify_state(root, point):
         memory_head = verify_memory(connection, seq) if MEMORY_TABLES <= actual else 0
         if SESSION_TABLES <= actual:
             verify_sessions(connection, seq)
+        if TELEGRAM_TABLES <= actual:
+            verify_telegram(connection)
         recovery = connection.execute("SELECT data FROM control WHERE name='restore'").fetchone()
         floor = max(route["epoch"], json.loads(recovery[0])["epoch_floor"] if recovery else 0)
         require(floor == point["epoch_floor"], "snapshot epoch floor mismatch")
@@ -250,6 +253,28 @@ def verify_state(root, point):
                         require(summary_revision <= revision and rows and rows[0][0:2] == ("summary", 0)
                             and rows[0][2] <= record["last_event_seq"], "checkpoint summary unavailable")
     return retained
+
+
+def verify_telegram(connection):
+    inbox = {}
+    for bot, identity, kind, status, encoded in connection.execute("SELECT bot,id,kind,status,data FROM telegram_inbox"):
+        entry = json.loads(encoded)
+        require(type(bot) is int and bot > 0 and type(identity) is int and identity >= 0,
+                "invalid Telegram update identity")
+        require(kind in ("turn", "command") and status in ("queued", "running", "blocked", "done", "cancelled"),
+                "invalid Telegram update state")
+        require(entry.get("bot_id") == bot and entry.get("update_id") == identity and entry.get("kind") == kind,
+                "Telegram update metadata mismatch")
+        require(isinstance(entry.get("session_id"), str) and isinstance(entry.get("request_id"), str), "invalid Telegram route")
+        offset = connection.execute("SELECT data FROM control WHERE name=?", (f"telegram_offset:{bot}",)).fetchone()
+        require(offset and type(json.loads(offset[0])) is int and json.loads(offset[0]) > identity, "Telegram cursor precedes update")
+        inbox[(bot, identity)] = entry
+    for bot, update_id, status, encoded in connection.execute("SELECT bot,update_id,status,data FROM telegram_outbox"):
+        data = json.loads(encoded)
+        require(status in ("pending", "sending", "delivered", "failed") and (bot, update_id) in inbox,
+                "orphan Telegram reply")
+        route = {key: value for key, value in inbox[(bot, update_id)].items() if key != "images"}
+        require(data.get("route") == route and isinstance(data.get("text"), str), "Telegram reply metadata mismatch")
 
 
 def verify_sessions(connection, event_seq):

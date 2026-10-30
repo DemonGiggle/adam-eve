@@ -5,6 +5,8 @@ The architecture and planned milestones are in [docs/SPEC.md](docs/SPEC.md).
 Acceptance evidence and operational scope are tracked in [docs/STATUS.md](docs/STATUS.md).
 Versioned facts, preferences and summaries, their source references, and the
 operator memory commands are described in [docs/MEMORY.md](docs/MEMORY.md).
+Configured Ollama and API-key providers are described in [docs/PROVIDERS.md](docs/PROVIDERS.md),
+and the optional Telegram frontend is described in [docs/TELEGRAM.md](docs/TELEGRAM.md).
 
 The v0.1 implementation supports controlled self-evolution: a trusted OTP controller
 serves isolated Adam/Eve BEAM processes, stages built candidates, and

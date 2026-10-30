@@ -64,7 +64,7 @@ request(Messages, #{url := Url, model := Model, llm_timeout := Timeout} = Config
         <<"on">> -> #{<<"think">> => true};
         Level -> #{<<"think">> => Level}
     end,
-    Body = jsx:encode(maps:merge(#{<<"model">> => Model, <<"messages">> => Messages,
+    Body = jsx:encode(maps:merge(#{<<"model">> => Model, <<"messages">> => ae_media:ollama(Messages),
                         <<"stream">> => false, <<"options">> => Options}, maps:merge(Thinking, Extra))),
     case ae_llm_api:headers(ae_llm:profile(Config)) of
       {ok, Headers} -> case ae_http:request(post, Url, Headers, Body, Timeout, 1048576) of

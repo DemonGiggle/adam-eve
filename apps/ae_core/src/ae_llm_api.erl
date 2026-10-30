@@ -24,7 +24,8 @@ complete(Messages, Config, Mode) ->
                 end;
             Error -> Error
         end
-    catch _:_ -> {error, invalid_provider_response} end.
+    catch error:thinking_not_supported -> {error, thinking_not_supported};
+          _:_ -> {error, invalid_provider_response} end.
 
 limits(ordinary, Config) -> {undefined, maps:get(max_tokens, Config)};
 limits({budget, Tokens}, _) when is_integer(Tokens), Tokens >= 2 -> {Tokens div 2, Tokens - Tokens div 2}.
@@ -38,16 +39,16 @@ route(P) ->
     end.
 
 body(responses, Messages, #{url := Base, model := Model} = P, Output, Mode) ->
-    B = #{<<"model">> => Model, <<"input">> => Messages, <<"store">> => false,
+    B = #{<<"model">> => Model, <<"input">> => ae_media:responses(Messages), <<"store">> => false,
         <<"stream">> => false, <<"max_output_tokens">> => Output},
     {Base ++ "/responses", format(maps:merge(B, thinking(responses, P)), responses, Mode)};
 body(chat_completions, Messages, #{url := Base, model := Model} = P, Output, Mode) ->
-    B = #{<<"model">> => Model, <<"messages">> => Messages, <<"stream">> => false,
+    B = #{<<"model">> => Model, <<"messages">> => ae_media:chat(Messages), <<"stream">> => false,
         <<"max_completion_tokens">> => Output},
     {Base ++ "/chat/completions", format(maps:merge(B, thinking(chat_completions, P)), chat_completions, Mode)};
 body(messages, Messages, #{url := Base, model := Model} = P, Output, _Mode) ->
     Systems = [Text || #{<<"role">> := <<"system">>, <<"content">> := Text} <- Messages],
-    Rest = [M || #{<<"role">> := Role} = M <- Messages, Role =/= <<"system">>],
+    Rest = ae_media:anthropic([M || #{<<"role">> := Role} = M <- Messages, Role =/= <<"system">>]),
     B = #{<<"model">> => Model, <<"messages">> => Rest, <<"max_tokens">> => Output,
         <<"stream">> => false, <<"system">> => iolist_to_binary(lists:join(<<"\n\n">>, Systems))},
     {Base ++ "/messages", maps:merge(B, thinking(messages, P))}.

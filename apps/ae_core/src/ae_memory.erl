@@ -30,6 +30,18 @@ dispatch(Db, {snapshot, At, Offset, Count}) ->
     Entries = page(lists:sublist(Records, Count), [], 0),
     {ok, #{<<"revision">> => Revision, <<"entries">> => Entries, <<"offset">> => Offset,
         <<"next_offset">> => Offset + length(Entries), <<"eof">> => length(Records) =:= length(Entries)}};
+dispatch(Db, {scoped, Prefix, At, Offset, Count}) ->
+    need(is_binary(Prefix) andalso byte_size(Prefix) > 0 andalso is_integer(Offset) andalso Offset >= 0 andalso
+        is_integer(Count) andalso Count > 0 andalso Count =< 32, invalid_memory_range),
+    Revision = revision(Db, At),
+    Rows = ae_sql:rows(Db, "SELECT m.data FROM memory_versions m WHERE m.revision<=? AND m.deleted=0 "
+        "AND substr(m.key,1,length(?))=? AND NOT EXISTS(SELECT 1 FROM memory_versions n "
+        "WHERE n.kind=m.kind AND n.key=m.key AND n.revision<=? AND n.revision>m.revision) "
+        "ORDER BY m.revision DESC LIMIT ? OFFSET ?", [Revision, Prefix, Prefix, Revision, Count + 1, Offset]),
+    Records = [jsx:decode(Data, [return_maps]) || {Data} <- Rows],
+    Entries = page(lists:sublist(Records, Count), [], 0),
+    {ok, #{<<"revision">> => Revision, <<"entries">> => Entries, <<"offset">> => Offset,
+        <<"next_offset">> => Offset + length(Entries), <<"eof">> => length(Records) =:= length(Entries)}};
 dispatch(Db, checkpoint) ->
     Revision = dispatch(Db, head),
     Ref = case ae_sql:rows(Db, "SELECT m.revision FROM memory_versions m WHERE m.kind='summary' AND m.deleted=0 "
@@ -45,7 +57,10 @@ context(Db, Request) ->
     %% update between memory_read and llm cannot alter an admitted turn's input.
     Revision = case ae_sql:rows(Db, "SELECT revision FROM turn_memory WHERE request_id=?", [Request]) of
         [] -> 0; [{Saved}] -> Saved end,
-    {ok, Snapshot} = dispatch(Db, {snapshot, Revision, 0, 32}), Snapshot.
+    [{Session}] = ae_sql:rows(Db, "SELECT session_id FROM turns WHERE request_id=?", [Request]),
+    Query = case ae_sessions:scope(Session) of
+        undefined -> {snapshot, Revision, 0, 32}; Prefix -> {scoped, Prefix, Revision, 0, 32} end,
+    {ok, Snapshot} = dispatch(Db, Query), Snapshot.
 
 write(Db, Origin, Kind, Key, Value, Sources, Expected, Deleted) ->
     need(text(Origin, 256) andalso kind(Kind) andalso text(Key, 128), invalid_memory_key),

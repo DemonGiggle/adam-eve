@@ -13,5 +13,7 @@ init(#{root := Root} = Config) ->
     Router = #{id => ae_router, start => {ae_router, start_link, [Config]}},
     Deployment = #{id => ae_deployment, start => {ae_deployment, start_link, [Config]}},
     Evolution = #{id => ae_evolution, start => {ae_evolution, start_link, [Config]}},
+    Telegram = case ae_telegram_config:enabled(Config) of
+        true -> [#{id => ae_telegram, start => {ae_telegram, start_link, [Config]}}]; false -> [] end,
     {ok, {#{strategy => rest_for_one, intensity => 3, period => 30},
-           [Store, Broker, Runtimes, Builds, Evaluations, Router, Deployment, Evolution]}}.
+           [Store, Broker, Runtimes, Builds, Evaluations, Router, Deployment, Evolution] ++ Telegram}}.

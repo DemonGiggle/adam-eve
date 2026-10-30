@@ -1,5 +1,11 @@
 -module(ae_cli).
--export([main/0]).
+-export([main/0, serve/0]).
+
+serve() ->
+    try
+        Config = ae_config:load(), application:load(ae_core), application:set_env(ae_core, config, Config),
+        {ok, _} = application:ensure_all_started(ae_core), receive stop -> ok end
+    catch _:_ -> io:put_chars(standard_error, "Controller startup failed.\n"), halt(1) end.
 
 main() ->
     ok = logger:remove_handler(default),
@@ -80,7 +86,7 @@ command(#{<<"op">> := <<"reject">>, <<"deployment_id">> := Id}) -> result(ae_dep
 command(#{<<"op">> := <<"deployment">>, <<"deployment_id">> := Id}) ->
     case ae_store:deployment(Id) of undefined -> #{<<"error">> => <<"unknown_deployment">>}; Job -> Job end;
 command(#{<<"op">> := <<"retry">>, <<"request_id">> := Request}) -> result(ae_store:retry_turn(Request));
-command(#{<<"op">> := <<"cancel">>, <<"request_id">> := Request}) -> result(ae_store:cancel_turn(Request));
+command(#{<<"op">> := <<"cancel">>, <<"request_id">> := Request}) -> result(ae_router:cancel_request(Request));
 command(#{<<"op">> := <<"history">>}) ->
     #{<<"events">> => [#{<<"seq">> => Seq, <<"kind">> => Kind, <<"data">> => Data} ||
                        {Seq, Kind, Data} <- ae_store:events()]};
