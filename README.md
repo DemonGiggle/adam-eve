@@ -147,6 +147,7 @@ fixing the cause. Runtime failures are audited.
 | `AE_LLM_URL` | `http://127.0.0.1:11434/api/chat` | Loopback HTTP endpoint only |
 | `AE_LLM_TIMEOUT_MS` | `30000` | Provider timeout, 100–300000 ms |
 | `AE_EVOLUTION_LLM_TIMEOUT_MS` | Conversation timeout | Authoring-only provider timeout, 100–3600000 ms, capped by the job deadline |
+| `AE_RETENTION_POLICY_JSON` | Required to enable evolution | Explicit preservation policy; see [RETENTION.md](docs/RETENTION.md) |
 | `AE_RUNTIME_START_TIMEOUT_MS` | `5000` | Runtime connect/authentication/restore deadline, 100–30000 ms |
 | `AE_LLM_MAX_TOKENS` | `512` | Requested output limit, 1–8192 |
 | `AE_CONTEXT_TURNS` | `8` | Recent turns supplied per session, 1–8 |

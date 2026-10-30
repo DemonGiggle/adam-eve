@@ -23,6 +23,14 @@ dispatch(Db, {find_origin, Origin}) ->
 dispatch(Db, mode) ->
     case ae_sql:rows(Db, "SELECT data FROM control WHERE name='evolution_enabled'", []) of
         [] -> true; [{Data}] -> jsx:decode(Data) end;
+dispatch(Db, {set_retention, Policy}) ->
+    need(ae_storage:validate_retention(Policy) =:= {ok, Policy}, retention_policy_required),
+    Encoded = jsx:encode(Policy),
+    case ae_sql:rows(Db, "SELECT data FROM control WHERE name='retention_policy'", []) of
+        [{Encoded}] -> ok;
+        _ -> ae_sql:exec(Db, "INSERT OR REPLACE INTO control VALUES('retention_policy',?)", [Encoded]),
+            event(Db, <<"retention_policy_configured">>, Policy), ok
+    end;
 dispatch(Db, {set_mode, Value}) when is_boolean(Value) ->
     ae_sql:exec(Db, "INSERT OR REPLACE INTO control VALUES('evolution_enabled',?)", [jsx:encode(Value)]),
     case {Value, active(Db)} of

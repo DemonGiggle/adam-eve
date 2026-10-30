@@ -41,7 +41,9 @@ Enabling requires `AE_EVOLUTION_ENABLED=true`, complete
 `AE_EVOLUTION_LIMITS_JSON`, `AE_BUILD_CONFIG_JSON` ([BUILD.md](BUILD.md)),
 `AE_EVAL_CONFIG_JSON` ([EVALUATION.md](EVALUATION.md)), and all four handoff
 timeouts (`AE_APPROVAL_TTL_MS`, `AE_OBSERVE_MS`, `AE_HEALTH_INTERVAL_MS`,
-`AE_QUIESCE_TIMEOUT_MS`). The runtime must use Bubblewrap and explicit sandbox
+`AE_QUIESCE_TIMEOUT_MS`). An explicit `AE_RETENTION_POLICY_JSON` is also required;
+the supported preservation policy and disk-pressure gate are documented in
+[RETENTION.md](RETENTION.md). The runtime must use Bubblewrap and explicit sandbox
 limits as documented in [ISOLATION.md](ISOLATION.md). For v0.1 host execution,
 select `AE_RESOURCE_LIMITS_MODE=process` and `resource_limits_mode: process` in
 both builder/evaluator JSON configurations. Delegated cgroups are optional for

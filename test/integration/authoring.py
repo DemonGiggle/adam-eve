@@ -145,7 +145,7 @@ def main():
                     policy.update({"max_llm_calls": 8, "max_tokens": 262144})
                 limit_file = root / "limits.json"
                 limit_file.write_text(json.dumps(policy))
-                extra_env = {}
+                extra_env = {"AE_RETENTION_POLICY_JSON": json.dumps({"promoted_generations": "all", "rejected_attempts": "all", "audit": "all"})}
                 if scenario in ("builder-unavailable", "builder-success", "evaluator-success", "evaluator-unavailable", "deployment-rollback", "orchestrated-rollback"):
                     if scenario == "builder-unavailable":
                         fake = root / "fake-cgroup"

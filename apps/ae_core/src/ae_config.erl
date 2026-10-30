@@ -21,10 +21,17 @@ load() ->
       context_turns => integer_env("AE_CONTEXT_TURNS", 8, 1, 8),
       max_llm_attempts => integer_env("AE_MAX_LLM_ATTEMPTS", 3, 1, 10),
       handoff_limits => handoff_limits(), candidate_builder => candidate_builder(), candidate_evaluator => candidate_evaluator(),
+      retention_policy => retention_policy(),
       evolution_requested => os:getenv("AE_EVOLUTION_ENABLED") =:= "true", evolution_limits => evolution_limits()}).
 
 evolution_llm_timeout(Default) ->
     try integer_env("AE_EVOLUTION_LLM_TIMEOUT_MS", Default, 100, 3600000)
+    catch _:_ -> undefined end.
+
+retention_policy() ->
+    try
+        Policy = jsx:decode(list_to_binary(required("AE_RETENTION_POLICY_JSON")), [return_maps, strict]),
+        {ok, Policy} = ae_storage:validate_retention(Policy), Policy
     catch _:_ -> undefined end.
 
 evolution_limits() ->

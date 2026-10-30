@@ -16,6 +16,7 @@ callback_mode() -> handle_event_function.
 configured(Config) ->
     try
         true = maps:get(evolution_requested, Config, false),
+        {ok, _} = ae_storage:validate_retention(maps:get(retention_policy, Config)),
         ModelTimeout = maps:get(evolution_llm_timeout, Config, maps:get(llm_timeout, Config, 30000)),
         true = is_integer(ModelTimeout) andalso ModelTimeout >= 100 andalso ModelTimeout =< 3600000,
         bubblewrap = maps:get(runtime_isolation, Config),
@@ -33,6 +34,9 @@ enabled(Config) ->
 
 init(Config) ->
     process_flag(trap_exit, true), self() ! recover,
+    case ae_storage:validate_retention(maps:get(retention_policy, Config, undefined)) of
+        {ok, Policy} -> ok = ae_store:evolution({set_retention, Policy});
+        _ -> ok end,
     {ok, recovering, #{config => Config, job => undefined, task => undefined, recovery_job => ae_store:evolution(active)}}.
 
 handle_event({call, From}, status, State, Data) ->
@@ -116,15 +120,22 @@ drive(#{job := Id, config := Config} = Data) ->
     end.
 
 advance(Job, #{task := Task} = Data) when Task =/= undefined -> {next_state, phase(Job), Data, poll(Data)};
-advance(#{<<"status">> := <<"proposing">>}, Data) ->
-    Id = maps:get(job, Data), {next_state, proposing, task(author, fun() -> ae_router:author(Id) end, Data), poll(Data)};
-advance(#{<<"status">> := <<"building">>}, #{job := Id, config := Config} = Data) ->
-    start_supervised(build, ae_build_sup:start_job(Id, Config, self()), Data);
-advance(#{<<"status">> := <<"testing">>}, #{job := Id, config := Config} = Data) ->
-    start_supervised(evaluate, ae_eval_sup:start_job(Id, Config, self()), Data);
-advance(#{<<"status">> := <<"evaluated">>}, #{job := Id} = Data) ->
-    {next_state, staging, task(stage, fun() -> ae_deployment:stage_evolution(Id) end, Data), poll(Data)};
+advance(#{<<"status">> := Phase, <<"limits">> := Limits}, #{config := Config, job := Id} = Data)
+        when Phase =:= <<"proposing">>; Phase =:= <<"building">>; Phase =:= <<"testing">>; Phase =:= <<"evaluated">> ->
+    case ae_storage:preflight(Config, Limits) of
+        ok -> begin_step(Phase, Data);
+        {error, Why} -> Next = request_cancel(Id, atom_to_binary(Why, utf8), Data), {keep_state, Next, poll(Next)}
+    end;
 advance(Job, Data) -> {next_state, phase(Job), Data, poll(Data)}.
+
+begin_step(<<"proposing">>, Data) ->
+    Id = maps:get(job, Data), {next_state, proposing, task(author, fun() -> ae_router:author(Id) end, Data), poll(Data)};
+begin_step(<<"building">>, #{job := Id, config := Config} = Data) ->
+    start_supervised(build, ae_build_sup:start_job(Id, Config, self()), Data);
+begin_step(<<"testing">>, #{job := Id, config := Config} = Data) ->
+    start_supervised(evaluate, ae_eval_sup:start_job(Id, Config, self()), Data);
+begin_step(<<"evaluated">>, #{job := Id} = Data) ->
+    {next_state, staging, task(stage, fun() -> ae_deployment:stage_evolution(Id) end, Data), poll(Data)}.
 
 start_supervised(Kind, {ok, Pid}, Data) ->
     Next = Data#{task := #{kind => Kind, pid => Pid, ref => monitor(process, Pid)}},
@@ -212,8 +223,10 @@ start_job(Origin, Objective, Config) ->
             Route = ae_store:routing(), Caps = maps:get(<<"capabilities">>, maps:get(<<"artifact">>, Route), []),
             case lists:all(fun(C) -> lists:member(C, Caps) end, [<<"evolution_propose">>, <<"evolution_llm">>, <<"source_read">>, <<"source_list">>, <<"evolution_status">>]) of
                 false -> {error, authoring_not_supported};
-                true -> case ae_store:evolution({create, Route, Origin, Objective, Limits}) of
-                    {ok, {existing, Job}} -> {ok, Job}; Other -> Other end
+                true -> case ae_storage:preflight(Config, Limits) of
+                    ok -> case ae_store:evolution({create, Route, Origin, Objective, Limits}) of
+                        {ok, {existing, Job}} -> {ok, Job}; Other -> Other end;
+                    Error -> Error end
             end;
         Error -> Error
     end.
