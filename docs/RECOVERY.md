@@ -103,7 +103,7 @@ backup configuration rather than an indefinite read transaction.
    closes admission without deleting or rewriting acknowledged history. It copies
    exact releases and never builds or executes source during verification.
 5. Start the controller using the recovered data root and the normal provider and
-   isolation configuration. `status` exposes `recovery.pending: true`, the backup
+   provider and host-execution configuration. `status` exposes `recovery.pending: true`, the backup
    identity, closed admission and the declared recovery point. The runtime restores
    a checkpoint through that point and reports ready as a standby. Its new epoch
    exceeds the supplied floor. Startup during an interrupted observation rolls

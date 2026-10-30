@@ -4,7 +4,7 @@
 Run `host --queue PATH --url http://127.0.0.1:PORT/api/chat` on the inference
 host, and `guest --queue MOUNTED_PATH` inside the VM. Bodies and usage counts
 are forwarded unchanged; request/response files retain the inference evidence.
-Generated sandboxes never mount this queue.
+Host-executed generated code can access this queue if its user has permission.
 """
 import argparse
 import base64

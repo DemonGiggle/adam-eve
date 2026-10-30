@@ -1,93 +1,53 @@
 # Independent candidate evaluation
 
-`ae_eval_sup:start_job(JobId, Config, NotifyPid)` starts a temporary supervised
-`ae_evaluator` for a built job in `testing`. It runs the controller-owned Python
-judge outside the candidate runtime. The evolution state machine and operator
-CLI connect authoring, build, evaluation and staging. Evaluation does not grant deployment
-approval. Digest-only manual staging rejects generated releases; trusted
-`ae_deployment:stage_evolution/1` requires the specific evaluated job, performs
-fresh isolated standby checks, and then waits for explicit bound approval.
-That stage reserves its own remaining job CPU allowance before launch and
-retains the job's requested resource ceilings and absolute runtime deadline.
-Complete aggregate CPU/memory/process enforcement requires the optional cgroup
-profile and is deferred to v0.2; the v0.1 host profile uses per-process limits.
+The supervised Erlang evaluator compares a retained baseline and candidate using
+synthetic conversations, then records a scorecard for the specific job,
+attempt, artifacts, and evaluation configuration. A passing score does not grant
+approval: staging and explicit operator approval are separate steps.
 
-## Isolation and durable results
+The evaluator and generated processes run on the host as the controller user.
+Separate BEAM processes and synthetic inputs do not prevent candidate code from
+reading or modifying host resources. See [Host execution](HOST_EXECUTION.md).
 
-Before starting, the worker verifies the retained baseline and candidate and
-reserves a durable evaluation execution lease. The lease pins hashes of the
-complete evaluator configuration, judge, source-export helper, sandbox launcher,
-and supplementary test recipe. A result must match that lease, job, attempt,
-baseline digest and candidate digest, arrive before expiry, and have a valid
-bounded scorecard. Unknown reservations cannot silently launch another execution.
-The exact private configuration is retained in SQLite with its reservation and
-therefore included in consistent backups. Each scorecard retains a fresh trial
-seed, allowing an operator to reconstruct its nonce cases from that policy.
+Before evaluation, the controller reserves a durable execution lease and binds
+the configuration and hashes of the evaluator, runtime peer, source exporter,
+and supplementary test recipe. The store validates the scorecard against that
+lease and retains it with its digest. Existing scorecards with the historical
+`isolation` gate remain readable; new scorecards report `host_execution`.
+Interrupted reservations are not silently reissued or refunded.
 
-Four sequential sandbox process groups share pessimistically reserved CPU
-slices: agent tests, baseline runtime, candidate runtime, and predecessor restore.
-Unused slices are not refunded. Requested memory/process limits cannot exceed
-the job's limits; the whole evaluation also has a deadline. Each process group
-uses the mandatory namespace/seccomp boundary and its explicitly configured
-resource profile. Aggregate watchdogs require the cgroup profile. Missing
-namespace isolation fails closed; selecting cgroups never automatically downgrades.
+The evaluator runs the candidate's EUnit/Common Test modules in a separate host
+BEAM, then runs paired synthetic cases against separate baseline and candidate
+runtimes. It validates the framed protocol, request and epoch correlation,
+capabilities, idempotency, restore, health, and expected mocked tool behavior. A
+further predecessor run checks restoration of synthetic context containing an
+acknowledged candidate reply. The evaluator sends mock responses and does not
+intentionally call the configured live provider for these cases.
 
-The judge keeps private cases, expected values, mock tools and synthetic history
-in its own process. A runtime receives only its sealed release and IPC socket.
-Agent tests receive public source and their selected release, plus the fixed test
-recipe in a separate sandbox. No case file, production database, credentials,
-live provider endpoint or production broker is mounted or passed to candidates.
-Generated archives and BEAM modules are decoded only inside these sandboxes.
-
-The store retains a scorecard and its digest under the attempt. Passing advances
-the job to `evaluated`. Failure retains the measurements and uses the original
-repair/attempt budget; repair feedback is a fixed public summary without private
-inputs, expected answers, replies or child diagnostics. The artifact manifest
-stays immutable, including its original null `evaluation` field. The separate
-trusted ledger is the authority for evaluation results.
-
-## Checks and measurements
-
-The judge validates authentication, strict bounded frames/schemas, request and
-epoch correlation, capabilities, idempotency keys, health, initial and repeated
-restore, and the configured behavior. Only mocked `memory_read` and `llm` tools
-are available. Duplicate identical tool calls replay a result; conflicting keys,
-unknown tools, fabricated event references and stale epochs fail the contract.
-
-Baseline and candidate receive the same independently generated nonce cases.
-After stopping the candidate through its sandbox owner's pipe, the judge starts
-a fresh predecessor, restores a later synthetic sequence, and tests context that
-includes a candidate reply. This is a synthetic compatibility check. The actual
-store's completed-effect preservation is tested separately through an actual
-generated-candidate promotion/crash/rollback. Successive LLM-authored generations
-and full orchestrator recovery still need end-to-end acceptance coverage.
-
-The supplementary recipe compiles agent test modules and runs EUnit and Common
-Test suites. A configured minimum module count can require agent tests. Common
-Test uses basic HTML logging so it does not need distribution-specific JavaScript
-symlinks outside the mounted toolchain. Agent tests cannot replace the outer
-judge or weaken its policy.
-
-Scorecards contain absolute baseline/candidate success, objective success,
-memory retrieval, tool correctness, required-case failures, crash/timeout-affected trial rate,
-latency samples/minimum/mean/maximum, and configured mock-model call/token/cost
-totals. Rates include nominal Wilson 95% binomial intervals over synthetic
-trials. These intervals do not estimate generalization to real user tasks;
-mock token/cost values are explicit fixture measurements, not live billing data.
+Scores include success, objective success, memory and tool correctness, required
+failures, crash/timeout rate, latency, and configured mock-model token/cost
+counts. Rates include nominal Wilson 95% binomial intervals. These are fixture
+measurements, not estimates of general user-task quality or live billing.
+Failed evaluations retain their scorecard and return a bounded public summary for
+repair. Candidate tests and generated code can access the host directly, so
+private policy and host data must not be treated as protected against them.
 
 ## Required configuration
 
-Set `AE_EVAL_CONFIG_JSON` to an object containing the required fields below.
-Missing or invalid configuration disables the evaluator.
+Set `AE_EVAL_CONFIG_JSON` to an object containing these fields. Missing or
+invalid configuration disables the evaluator.
 
 | Field | Meaning |
 |---|---|
-| `cgroup_root` | Absolute cgroup path; unused by the process profile |
-| `resource_limits_mode` | Optional: `process` for v0.1 host execution; omitted values preserve the strict `cgroup` profile |
-| `source_bytes`, `source_files`, `artifact_bytes` | Public source/export and release ceilings |
-| `sandbox_limits` | All nine resource fields documented in [ISOLATION.md](ISOLATION.md) |
-| `startup_ms`, `turn_ms` | Bounded runtime handshake/restore and per-turn deadlines |
-| `policy` | Complete trusted policy described below |
+| `source_bytes`, `source_files`, `artifact_bytes` | Retained source and release size ceilings |
+| `output_bytes` | Maximum captured output from supplementary tests |
+| `cpu_ms` | Pessimistic job-budget reservation; not an enforced CPU limit |
+| `wall_ms` | Evaluation lease and worker deadline |
+| `startup_ms`, `turn_ms` | Runtime handshake/restore and per-turn deadlines |
+| `policy` | Complete evaluation policy described below |
+
+Legacy configuration objects are accepted for retained records and existing
+setups, but their cgroup and sandbox fields do not enforce isolation.
 
 Policy version 1 requires `version`, `repetitions`, `min_success_delta_ppm`,
 `max_success_regression_ppm`, `max_latency_ratio_milli`,
@@ -112,25 +72,7 @@ configured regression/latency/model-budget/failure thresholds, and meet the
 objective improvement threshold or explicit repair exception. Passing these
 tests is not a claim of general intelligence improvement.
 
-[test/evaluation/policy.json](../test/evaluation/policy.json) is a small synthetic
-test policy, not a production policy or default budget. Judge checks run with
-`scripts/test`, including actual restricted host comparisons, supplementary-test
-failures and supervised evaluation with the process profile. Set
-`AE_TEST_RESOURCE_LIMITS_MODE=cgroup` and `AE_TEST_CGROUP_ROOT` to repeat those
-checks with aggregate enforcement. Software-emulated validation can explicitly select
-`AE_TEST_EVAL_WALL_MS` and `AE_TEST_EVAL_CPU_MS`; those values do not alter
-production configuration.
-
-Validation includes the native controller/integration suite using Bubblewrap
-process limits, as well as earlier separate
-unprivileged Linux VM runs with delegated cgroups: passing EUnit/Common Test,
-deliberately failing suites, accepted and rejected behavioral comparisons,
-predecessor restore, and supervised author → build → evaluate. Integration also
-checks concurrent conversation service, no synthetic turns in production
-history, retained private policy bytes, and fail-closed unavailable isolation.
-Software emulation used explicit test allowances of 180000 ms wall/90000 ms CPU
-for builds and 600000 ms wall/240000 ms aggregate reserved CPU for evaluations.
-An additional VM integration explicitly approves and promotes a fixture-authored
-candidate, kills it after an acknowledged reply/tool result, and verifies both
-records after rollback under a new epoch. These checks use a fixture provider;
-they do not establish live-model authoring quality or authorize a user's production identity.
+[test/evaluation/policy.json](../test/evaluation/policy.json) is a synthetic
+fixture policy, not a default production policy. The host integration suite
+covers successful and failing EUnit/Common Test cases, baseline/candidate
+comparisons, synthetic rollback, and the full author-to-promotion path.

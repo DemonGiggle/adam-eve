@@ -1,5 +1,8 @@
 # Implementation status against SPEC v0.1
 
+This is a historical acceptance snapshot. The current implementation uses host
+execution without the sandbox described below; see [Host execution](../HOST_EXECUTION.md).
+
 This report tracks the current implementation against SPEC v0.1 revision 3.
 It describes implemented behavior
 and existing test evidence; it does not change the requirements in [SPEC.md](../SPEC.md).
@@ -138,4 +141,4 @@ Production operators supply their own limits, objectives, backup schedule/storag
 and restore evidence for the required failure domain.
 
 Implementation details and test entry points are in [EVOLUTION.md](../EVOLUTION.md),
-[BUILD.md](../BUILD.md), [ISOLATION.md](../ISOLATION.md), [MEMORY.md](../MEMORY.md), and [RECOVERY.md](../RECOVERY.md).
+[BUILD.md](../BUILD.md), [HOST_EXECUTION.md](../HOST_EXECUTION.md), [MEMORY.md](../MEMORY.md), and [RECOVERY.md](../RECOVERY.md).

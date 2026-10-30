@@ -32,7 +32,8 @@ init({Root, Routing, Config}) ->
         {ok, Listen} = gen_tcp:listen(0, [{ifaddr, {local, Path}} | ae_protocol:socket_options()]),
         try
             ok = file:change_mode(Path, 8#600),
-            {Executable, Args} = ae_sandbox:runtime(Root, Manifest, Directory, #{token => Token, config => Config}),
+            Executable = os:find_executable("escript"),
+            Args = [ae_artifacts:executable(Root, Manifest), Directory ++ "/ipc", binary_to_list(Token)],
             Remaining = min(StartTimeout, maps:get(runtime_deadline, Config, erlang:system_time(millisecond) + StartTimeout)
                 - erlang:system_time(millisecond)),
             true = Remaining > 0,

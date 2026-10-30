@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Exercise seed authoring, isolated host builds/evaluation and promotion/rollback."""
+"""Exercise seed authoring, host builds/evaluation and promotion/rollback."""
 import difflib
 import json
 import os
@@ -126,7 +126,6 @@ class Provider(BaseHTTPRequestHandler):
 
 
 def main():
-    resource_mode = os.environ.get("AE_TEST_RESOURCE_LIMITS_MODE", "process")
     server = ThreadingHTTPServer(("127.0.0.1", 0), Provider)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     with tempfile.TemporaryDirectory(prefix="ae-authoring-") as directory:
@@ -141,8 +140,7 @@ def main():
             "processes": 32, "disk_reserve_bytes": 1048576}
         try:
             scenarios = ["success", "full-source", "edit-paged", "protected", "budget", "invalid", "missing-usage", "over-budget", "cache", "repair", "builder-unavailable"]
-            if resource_mode == "process" or os.environ.get("AE_TEST_CGROUP_ROOT"):
-                scenarios.extend(["builder-success", "evaluator-success", "evaluator-unavailable", "deployment-rollback", "orchestrated-rollback"])
+            scenarios.extend(["builder-success", "evaluator-success", "evaluator-unavailable", "deployment-rollback", "orchestrated-rollback"])
             if os.environ.get("AE_TEST_AUTHORING_SCENARIOS"):
                 scenarios = os.environ["AE_TEST_AUTHORING_SCENARIOS"].split(",")
                 assert all(s in {"success", "full-source", "edit-paged", "protected", "budget", "invalid", "missing-usage", "over-budget", "cache", "repair", "builder-unavailable", "builder-success", "evaluator-success", "evaluator-unavailable", "deployment-rollback", "orchestrated-rollback"} for s in scenarios)
@@ -187,37 +185,24 @@ def main():
                 extra_env = {"AE_RETENTION_POLICY_JSON": json.dumps({"promoted_generations": "all", "rejected_attempts": "all", "audit": "all"})}
                 if scenario in ("builder-unavailable", "builder-success", "evaluator-success", "evaluator-unavailable", "deployment-rollback", "orchestrated-rollback"):
                     if scenario == "builder-unavailable":
-                        fake = root / "fake-cgroup"
-                        fake.mkdir()
                         wall_ms, cpu_ms = 5000, 1000
-                    else:
-                        fake = Path(os.environ.get("AE_TEST_CGROUP_ROOT", "/sys/fs/cgroup"))
                     package = os.environ.get("AE_JSX_PACKAGE", str(Path.home() / ".cache/rebar3/hex/hexpm/packages/jsx-3.1.0.tar"))
-                    extra_env["AE_BUILD_CONFIG_JSON"] = json.dumps({"cgroup_root": str(fake), "jsx_package": package,
-                        "resource_limits_mode": "cgroup" if scenario == "builder-unavailable" else resource_mode,
+                    if scenario == "builder-unavailable":
+                        package = str(root / "missing-jsx.tar")
+                    extra_env["AE_BUILD_CONFIG_JSON"] = json.dumps({"jsx_package": package,
                         "source_bytes": 2097152, "source_files": 128, "artifact_bytes": 8388608,
-                        "sandbox_limits": {"memory_bytes": 536870912, "pids": 32, "cpu_percent": 100,
-                            "cpu_seconds": (cpu_ms + 999) // 1000, "address_space_bytes": 1073741824, "file_bytes": 33554432,
-                            "open_files": 128, "output_bytes": 16777216, "wall_ms": wall_ms}})
+                        "output_bytes": 16777216, "cpu_ms": cpu_ms, "wall_ms": wall_ms})
                     if scenario != "builder-unavailable":
-                        runtime_limits = json.loads(extra_env["AE_BUILD_CONFIG_JSON"])["sandbox_limits"]
-                        runtime_limits = {**runtime_limits, "pids": 64, "cpu_seconds": (policy["cpu_ms"] + 999) // 1000,
-                            "wall_ms": policy["total_ms"], "output_bytes": 65536}
-                        extra_env.update({"AE_RUNTIME_ISOLATION": "bubblewrap", "AE_RESOURCE_LIMITS_MODE": resource_mode,
-                            "AE_CGROUP_ROOT": str(fake), "AE_SANDBOX_LIMITS_JSON": json.dumps(runtime_limits)})
+                        extra_env["AE_RUNTIME_ISOLATION"] = "host"
                 if scenario.startswith(("evaluator-", "deployment-", "orchestrated-")):
                     sys.path.insert(0, str(CHECKOUT / "test/evaluation"))
-                    import test_evaluate
+                    import ae_test_policy
                     evaluation = json.loads(extra_env["AE_BUILD_CONFIG_JSON"])
                     del evaluation["jsx_package"]
-                    evaluation.update({"startup_ms": 30000, "turn_ms": 15000, "policy": test_evaluate.policy(),
-                        "sandbox_limits": {**evaluation["sandbox_limits"], "wall_ms": evaluation_wall,
-                            "cpu_seconds": (evaluation_cpu + 3999)//4000}})
+                    evaluation.update({"startup_ms": 30000, "turn_ms": 15000, "policy": ae_test_policy.policy(),
+                        "wall_ms": evaluation_wall, "cpu_ms": evaluation_cpu})
                     if scenario == "evaluator-unavailable":
-                        fake_evaluation = root / "fake-evaluation-cgroup"
-                        fake_evaluation.mkdir()
-                        evaluation["cgroup_root"] = str(fake_evaluation)
-                        evaluation["resource_limits_mode"] = "cgroup"
+                        evaluation["artifact_bytes"] = 1
                     extra_env["AE_EVAL_CONFIG_JSON"] = json.dumps(evaluation)
                 if scenario in ("deployment-rollback", "orchestrated-rollback"):
                     extra_env.update({"AE_APPROVAL_TTL_MS": "120000", "AE_OBSERVE_MS": "60000",
@@ -250,7 +235,7 @@ def main():
                     assert output["result"]["ok"] == {"cached": True, "unknown_not_reissued": True}
                     assert len(Provider.requests) == 1 and job["llm_calls"] == 2
                 elif scenario == "builder-unavailable":
-                    assert output["result"]["error"] == "cgroup_v2_required", output
+                    assert output["result"]["error"] == "build_failed", output
                     assert job["reserved_cpu_ms"] == 1000 and job["status"] == "proposing"
                     assert job["attempts"] == 1
                     assert next(iter(job["executions"].values()))["status"] == "failed"
@@ -266,8 +251,7 @@ def main():
                     if scenario in ("deployment-rollback", "orchestrated-rollback"):
                         stage = job["executions"][str(job["attempts"]) + ":stage"]
                         assert stage["status"] == "completed" and stage["cpu_ms"] == policy["cpu_ms"] - cpu_ms * job["attempts"] - evaluation_cpu
-                        assert stage["runtime_limits"]["pids"] <= policy["processes"]
-                        assert stage["runtime_limits"]["memory_bytes"] <= policy["memory_bytes"]
+                        assert stage["execution_mode"] == "host"
                         assert stage["expires_at_ms"] <= job["deadline"]
                     if scenario in ("evaluator-success", "deployment-rollback", "orchestrated-rollback"):
                         assert job["status"] == ("rolled_back" if scenario in ("deployment-rollback", "orchestrated-rollback") else "evaluated"), output
@@ -280,7 +264,7 @@ def main():
                         assert job["built_artifact"]["evaluation"] is None
                         assert len(Provider.requests) == (6 if scenario == "orchestrated-rollback" else 3), "Evaluator must not contact the live provider"
                     else:
-                        assert output["result"]["error"] == "cgroup_v2_required", output
+                        assert output["result"]["error"] == "evaluation_failed", output
                         assert job["status"] == "proposing" and job["executions"][str(job["attempts"]) + ":evaluate"]["status"] == "failed", output
                 else:
                     expected = {"protected": "protected_source", "budget": "budget_exhausted",

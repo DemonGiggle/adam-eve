@@ -27,7 +27,7 @@ spending. Pressure observed between steps cancels the job through its normal
 cleanup path and preserves retained versions.
 
 This is a conservative admission check, not a filesystem quota against other
-writers. The isolated builder/evaluator also check space before their own large
+writers. The host builder/evaluator also check space before their own large
 allocations. Operators still provision and monitor persistent storage and backup
 destinations according to the environment policy.
 

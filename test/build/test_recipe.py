@@ -39,8 +39,7 @@ class RecipeTests(unittest.TestCase):
             ae_build.build_manual(first, revision, tree, None, a, trusted_manual=True)
             ae_build.build_manual(second, revision, tree, None, b, trusted_manual=True)
             self.assertEqual(a.read_bytes(), b.read_bytes())
-            # The isolated builder transfers opaque bytes through bounded stdout;
-            # its private tmpfs never has to be mounted writable on the host.
+            # The host builder transfers opaque bytes through bounded stdout.
             with ae_build.pinned_dependency() as dependency:
                 transfer = subprocess.run(["escript", *ae_build.recipe_arguments(
                     first, dependency, revision, tree, None, "-")], check=True, capture_output=True)

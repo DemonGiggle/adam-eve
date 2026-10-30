@@ -53,6 +53,26 @@ dispatch(Db, {degraded, Id, Reason}) ->
     New = Job#{<<"status">> := <<"degraded">>, <<"reason">> => Reason}, save(Db, New),
     event(Db, <<"evolution_degraded">>, #{<<"job_id">> => Id, <<"reason">> => Reason}), {ok, New};
 dispatch(Db, active) -> active(Db);
+dispatch(Db, {reserve_staging, Id, host}) ->
+    Job = must_get(Db, Id), need(current(Db, Job) =:= ok, stale_or_expired_job),
+    need(maps:get(<<"status">>, Job) =:= <<"evaluated">>, invalid_job_state),
+    Limits = maps:get(<<"limits">>, Job),
+    StageKey = execution_key(maps:get(<<"attempts">>, Job), <<"stage">>),
+    need(not maps:is_key(StageKey, maps:get(<<"executions">>, Job, #{})), execution_outcome_unknown),
+    Remaining = maps:get(<<"cpu_ms">>, Limits) - maps:get(<<"reserved_cpu_ms">>, Job, 0),
+    case Remaining > 0 of
+        false -> exhaust(Db, Job, <<"staging_cpu_budget">>);
+        true ->
+            Wall = maps:get(<<"deadline">>, Job) - now_ms(),
+            Attempt = maps:get(<<"attempts">>, Job),
+            case reserve_execution(Db, Job, Attempt, <<"stage">>, Remaining, Wall) of
+                {ok, Lease} when is_map(Lease) ->
+                    Bound = Lease#{<<"execution_mode">> => <<"host">>},
+                    Reserved = must_get(Db, Id), Executions = maps:get(<<"executions">>, Reserved),
+                    save(Db, Reserved#{<<"executions">> := Executions#{StageKey := Bound}}), {ok, Bound};
+                Error -> Error
+            end
+    end;
 dispatch(Db, {reserve_staging, Id, RuntimeLimits}) ->
     Job = must_get(Db, Id), need(current(Db, Job) =:= ok, stale_or_expired_job),
     need(maps:get(<<"status">>, Job) =:= <<"evaluated">>, invalid_job_state),

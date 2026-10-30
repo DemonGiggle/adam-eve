@@ -16,8 +16,9 @@ The controller creates a private temporary directory (0700) and Unix socket
 connection is created. The seed receives only its socket path and a random,
 single-instance authentication token. Its inherited environment is removed,
 except a fixed executable search path and BEAM resource flags. Provider settings
-and controller secrets are not passed to the seed. This same-user development
-transport requires an OS sandbox before running untrusted generated code.
+and controller secrets are not passed through this protocol. Agent runtimes run
+as the controller user without an OS sandbox and can access host resources
+outside the protocol; see [Host execution](HOST_EXECUTION.md).
 
 ## Bootstrap
 

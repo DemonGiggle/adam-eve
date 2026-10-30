@@ -76,14 +76,9 @@ def kill(controller):
 
 
 def settings():
-    mode = os.environ.get("AE_TEST_RESOURCE_LIMITS_MODE", "process")
-    cgroup = os.environ.get("AE_TEST_CGROUP_ROOT", "/sys/fs/cgroup")
-    sandbox = {"memory_bytes": 536870912, "pids": 64, "cpu_percent": 100, "cpu_seconds": 20,
-        "address_space_bytes": 1073741824, "file_bytes": 33554432, "open_files": 128,
-        "output_bytes": 16777216, "wall_ms": 60000}
-    builder = {"cgroup_root": cgroup, "resource_limits_mode": mode,
-        "jsx_package": os.environ.get("AE_JSX_PACKAGE", str(Path.home() / ".cache/rebar3/hex/hexpm/packages/jsx-3.1.0.tar")),
-        "source_bytes": 2097152, "source_files": 128, "artifact_bytes": 8388608, "sandbox_limits": sandbox}
+    builder = {"jsx_package": os.environ.get("AE_JSX_PACKAGE", str(Path.home() / ".cache/rebar3/hex/hexpm/packages/jsx-3.1.0.tar")),
+        "source_bytes": 2097152, "source_files": 128, "artifact_bytes": 8388608,
+        "output_bytes": 16777216, "cpu_ms": 20000, "wall_ms": 60000}
     limits = {"max_attempts": 2, "total_ms": 600000, "max_llm_calls": 4,
         "tokens_per_call": 32768, "max_tokens": 131072, "max_cost_microunits": 0,
         "cost_per_call_microunits": 0, "max_patch_bytes": 65536, "max_diagnostic_bytes": 4096,
@@ -92,13 +87,11 @@ def settings():
         "memory_bytes": 536870912, "processes": 64, "disk_reserve_bytes": 1048576}
     import sys
     sys.path.insert(0, str(CHECKOUT / "test/evaluation"))
-    import test_evaluate
+    import ae_test_policy
     evaluation = {key: value for key, value in builder.items() if key != "jsx_package"}
-    evaluation.update({"startup_ms": 30000, "turn_ms": 15000, "policy": test_evaluate.policy(),
-        "sandbox_limits": {**sandbox, "wall_ms": 180000, "cpu_seconds": 30}})
-    return {"AE_RUNTIME_ISOLATION": "bubblewrap", "AE_RESOURCE_LIMITS_MODE": mode,
-        "AE_CGROUP_ROOT": cgroup, "AE_SANDBOX_LIMITS_JSON": json.dumps({**sandbox,
-            "cpu_seconds": 240, "wall_ms": 600000, "output_bytes": 65536}),
+    evaluation.update({"startup_ms": 30000, "turn_ms": 15000, "policy": ae_test_policy.policy(),
+        "wall_ms": 180000, "cpu_ms": 120000})
+    return {"AE_RUNTIME_ISOLATION": "host",
         "AE_EVOLUTION_ENABLED": "true", "AE_EVOLUTION_LIMITS_JSON": json.dumps(limits),
         "AE_BUILD_CONFIG_JSON": json.dumps(builder), "AE_EVAL_CONFIG_JSON": json.dumps(evaluation),
         "AE_RETENTION_POLICY_JSON": json.dumps({"promoted_generations": "all", "rejected_attempts": "all", "audit": "all"}),

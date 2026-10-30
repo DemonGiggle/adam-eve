@@ -1,151 +1,62 @@
-# Fixed seed build recipe
+# Candidate builds
 
-Seed publication uses the controller-owned `build_seed.escript` recipe instead
-of executing a source-controlled rebar build. The development `scripts/build`
-command still uses rebar to compile the controller and prepare its dependencies.
-`publish_seed` and `publish_candidate` build their explicitly trusted manual
-source with the fixed recipe and retain the resulting executable as before.
+The controller builds LLM-authored patches with Erlang code in
+`ae_host_prepare`, `ae_host_build`, and a fixed `build_seed.escript` compiler
+recipe. Compilation runs on the host as the controller user. A generated patch,
+compiler hook, or agent test can affect files, processes, and network resources
+accessible to that user. See [Host execution](HOST_EXECUTION.md).
 
-The recipe:
+The authoring broker and builder check the pinned baseline, patch hash, changed
+paths, source tree, and dependency inputs. The builder applies the patch to a
+private Git index and retains a deterministic child commit. It exports raw Git
+blobs instead of using checkout filters, so the exported source matches the
+retained tree. It rejects symlinks, submodules, unapproved paths, and oversized
+source before compiling.
 
-- Checks the supported seed manifest and exact locked JSX dependency. It refuses
-  extra build hooks, plugins, compiler configuration, or dependency declarations.
-- Compiles seed, shared protocol, and verified JSX source with deterministic
-  compiler output, debug information, and warnings as errors. Includes resolve
-  from stable relative source paths. Symlink source entries and duplicate module
-  names are rejected.
-- Builds application descriptors from the actual compiled modules, includes the
-  dependency license, and sorts archive members with fixed timestamps/modes.
-- Embeds source revision/tree, parent artifact, recipe and dependency hashes,
-  and OTP/ERTS/compiler/architecture information in the executable. This avoids
-  associating one executable identity with conflicting source provenance.
+The fixed recipe checks the seed configuration and lock, compiles the seed,
+protocol, and pinned JSX source, then produces a reproducible escript. It embeds
+the source revision/tree, parent artifact, recipe and dependency hashes, and
+OTP/ERTS/compiler information. The controller checks the output size, retains
+the exact executable and source ref, and verifies the resulting artifact before
+recording it. An unevaluated generated artifact is not directly promotable;
+see [Evaluation](EVALUATION.md) and [Controlled evolution](EVOLUTION.md).
 
-The package cache must contain the exact `jsx-3.1.0.tar` fetched by `scripts/build`.
-The raw package SHA-256 is checked before extraction, matching the protected seed
-lock. Extraction is bounded and excludes links and unsafe paths. Set
-`AE_JSX_PACKAGE` if the verified package is stored outside rebar's default cache.
-The recipe does not fetch dependencies or consult user build configuration.
+Publication shares a filesystem lock with backup and manual publication. It
+writes and syncs the executable and manifest in a temporary directory before
+renaming it into the content-addressed artifact store. Existing artifacts are
+verified before reuse. Durable execution reservations prevent an interrupted
+build from being automatically reissued or receiving a refunded budget.
 
-The manual build helper requires an explicit `trusted_manual=True` call. It
-clears the compiler's inherited environment; it has no generated-code fallback.
-The manual publisher remains inappropriate for untrusted or AI-authored patches:
-compiler code still executes on the operator host in this development path.
+## Configuration
 
-## Isolated candidate builder
-
-`ae_build_sup:start_job(JobId, Config, NotifyPid)` starts a temporary supervised
-`ae_builder` for an accepted proposal. It reserves a durable execution lease
-before starting the fixed Python launcher. CPU reservations accumulate across
-builds, evaluations, staging and repairs without refunds after failure or restart. An
-unresolved reservation cannot silently launch a duplicate execution. Each lease
-also has an absolute expiry within the job deadline. The builder can advance a
-job from `building` to `testing`; it cannot approve or deploy it.
-
-`ae_candidate.py` uses a private Git index against the protected active source
-ref. It checks the baseline, patch hash, changed-path set, regular file modes,
-source size/count, and cumulative source parent. Git hooks, filters, external
-object stores, replacements, and arbitrary configuration are excluded. It
-retains a deterministic commit under `refs/attempts/<job>/<attempt>` and exports
-raw blobs, so checkout/archive attributes cannot alter compiler input bytes.
-Only public build inputs are exported; controller code, Git metadata, private
-contract tests and credentials are not mounted in the compiler. Unexpected
-private files and symlinks cause rejection rather than being copied into it.
-
-Compilation uses the namespace/seccomp backend and the explicitly selected resource profile, with source and
-the verified dependency mounted read-only. The exact controller recipe is
-hashed and sealed before mounting. The compiler emits bounded base64 release
-bytes through stdout; it receives no writable host output mount. The controller
-treats those contents as opaque untrusted bytes, checks their size/hash and
-durably publishes the complete release and protected generation ref. It never
-decodes a generated BEAM/archive or loads candidate modules into its own VM.
-
-The manifest records the source tree/parent, objective, job/attempt, patch hash,
-toolchain compatibility and pinned recipe/dependency hashes. Its `authoring` is
-`llm` and `evaluation` is null. Publication alone does not make it deployable:
-ordinary deployment rejects generated artifacts with
-`independent_evaluation_required`. The supervised independent evaluator is
-documented in [EVALUATION.md](EVALUATION.md). Job-bound generated staging and
-manual approval are connected through the evolution state machine and CLI trigger
-described in [EVOLUTION.md](EVOLUTION.md). Complete explicit configuration and
-restricted execution are required to enable evolution.
-Missing isolation never falls back to the manual host compiler.
-
-Candidate publication holds the shared publication/backup lock, syncs the
-protected source ref and objects, writes and syncs executable/manifest contents
-in a hidden directory, then atomically renames it and syncs the artifact parent.
-An idempotent retry verifies exact bytes and re-syncs both the existing release
-and parent before returning; a publisher could have died just after rename.
-`test_publication_sigkill_never_exposes_partial_releases` kills a separate
-publisher at six boundaries from source sync through parent sync and uses the
-real Erlang artifact loader to verify that incomplete releases stay unavailable
-while the baseline remains intact. Exact publication can be retried without
-executing source. This is not automatic build recovery or approval: unknown
-execution reservations remain consumed, and a complete orphan is still
-unevaluated. Process-kill checks do not simulate physical disk/power loss.
-
-Configure the internal builder through `AE_BUILD_CONFIG_JSON`. Every field is
-required; invalid or missing configuration disables the builder. For example,
-the following are **local test budgets**, not production defaults:
+Set `AE_BUILD_CONFIG_JSON` to a JSON object with explicit values. The following
+are examples for a local experiment, not universal defaults:
 
 ```json
 {
-  "cgroup_root": "/sys/fs/cgroup/owned-jobs",
-  "resource_limits_mode": "process",
-  "jsx_package": "/private/cache/jsx-3.1.0.tar",
+  "jsx_package": "/absolute/path/to/jsx-3.1.0.tar",
   "source_bytes": 2097152,
   "source_files": 128,
   "artifact_bytes": 8388608,
-  "sandbox_limits": {
-    "memory_bytes": 536870912,
-    "pids": 32,
-    "cpu_percent": 100,
-    "cpu_seconds": 5,
-    "address_space_bytes": 1073741824,
-    "file_bytes": 33554432,
-    "open_files": 128,
-    "output_bytes": 16777216,
-    "wall_ms": 20000
-  }
+  "output_bytes": 16777216,
+  "cpu_ms": 10000,
+  "wall_ms": 20000
 }
 ```
 
-Requested CPU/memory/process/time bounds cannot exceed the durable job/lease
-limits. The process profile applies per-process limits and the wall deadline;
-complete aggregate enforcement is deferred to v0.2. The optional cgroup watchdog also enforces fractional-second aggregate CPU
-budgets; polling and kernel scheduling impose watchdog granularity. Compiler
-failures return bounded public diagnostics, without raw Git/host errors. Scope
-violations terminate the job. Failed compilation can request a complete repair
-diff within the original remaining budget. The control plane and conversation
-service remain usable after a failed build.
+`scripts/build` fetches the pinned JSX package into the rebar cache, usually
+`~/.cache/rebar3/hex/hexpm/packages/jsx-3.1.0.tar`. `jsx_package` must be an
+absolute path. Erlang verifies the package hash and bounds extraction before the
+fixed recipe runs. Old builder configuration objects are accepted for existing
+identities, but their sandbox and cgroup fields no longer enforce isolation.
 
-Reproducibility tests rebuild the same committed input under different directory
-paths and file timestamps and compare the complete executable bytes. They also
-check embedded provenance, licensing, distinct source identities, pinned-package
-denial, and rejection of source-controlled build hooks. Existing Phase 0/1 tests
-exercise these releases through real runtime restart, handoff, and rollback.
+`cpu_ms` is a pessimistic reservation against the job budget, not a measured
+CPU limit. The build worker enforces its wall deadline and output bound; it does
+not enforce memory, process, or aggregate CPU limits on generated host code.
+The controller retains bounded compiler diagnostics for repair attempts.
 
-These checks establish reproducibility for the tested pinned inputs/toolchain.
-They do not establish cross-toolchain equivalence, a self-contained ERTS release,
-or the independent Phase 2 quality gates.
-
-Candidate tests cover pinned exports/ancestry, deterministic attempt commits,
-zero-context patch checks, symlink/scope denial, mandatory execution leases,
-disk reserve and fail-closed isolation. The default suite runs successful
-restricted host compilation and retained output with the process profile.
-The authoring integration includes a supervised-build failure, a successful
-author → build → testing transition, independent evaluation and generated
-promotion/rollback. Set `AE_TEST_RESOURCE_LIMITS_MODE=cgroup` together with
-`AE_TEST_CGROUP_ROOT` to repeat those checks with aggregate enforcement.
-
-The native development host lacks cgroup delegation. Separate checks in an
-unprivileged user session inside a disposable QEMU/Linux 6.12 VM verified all
-eight kernel boundary tests, a successful restricted build, and the supervised
-authoring-to-build transition with both runtime and compiler restricted. Software
-emulation used explicit test allowances of 180000
-ms build wall time and 90000 ms CPU. These are selected by
-`AE_TEST_BUILD_WALL_MS`/`AE_TEST_BUILD_CPU_MS`, not substituted for production
-budgets. A separate restricted-runtime test killed the launcher, verified fresh
-epochs and retained completed/unknown effects, then restarted from a checkpoint.
-The full Adam/Eve handoff suite also passes directly on the host with Bubblewrap
-and the process profile. Evaluator
-checks and their scope are documented separately in [EVALUATION.md](EVALUATION.md).
+The operator commands `scripts/publish_seed` and `scripts/publish_candidate`
+use the same fixed recipe for manual publication. They currently use Python as
+standalone operator tools; the Erlang controller does not invoke them. The
+integration suite covers host builds, pinned inputs, source scope, evaluation,
+approval, crash recovery, and rollback with fixture model responses.

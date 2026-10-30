@@ -7,7 +7,7 @@ start_link(Id, Config, Notify) -> gen_server:start_link(?MODULE, {Id, Config, No
 init({Id, Config, Notify}) ->
     self() ! start,
     {ok, #{id => Id, config => Config, notify => Notify, parent => monitor(process, Notify),
-           lease => undefined, job => undefined, directory => undefined, port => undefined, timer => undefined, output => <<>>}}.
+           lease => undefined, job => undefined, directory => undefined, timer => undefined}}.
 handle_call(_, _, State) -> {reply, {error, unsupported}, State}.
 handle_cast(_, State) -> {noreply, State}.
 handle_info(start, State) ->
@@ -15,23 +15,17 @@ handle_info(start, State) ->
         {ok, Next} -> {noreply, Next};
         {error, Reason, Next} -> failed(Reason, <<>>, Next)
     catch _:_ -> failed(<<"builder_start_failed">>, <<>>, State) end;
-handle_info({Port, {data, Data}}, #{port := Port, output := Acc} = State) ->
-    case byte_size(Acc) + byte_size(Data) =< 1048576 of
-        true -> {noreply, State#{output := <<Acc/binary, Data/binary>>}};
-        false -> failed(<<"builder_output_limit">>, <<>>, State)
-    end;
-handle_info({Port, {exit_status, Code}}, #{port := Port, output := Output} = State) ->
-    try jsx:decode(Output, [return_maps, strict]) of
-        #{<<"ok">> := true, <<"manifest">> := Manifest} when Code =:= 0 ->
-            #{config := #{root := Root}, id := Id, job := Job, lease := Lease} = State,
-            ok = ae_artifacts:verify(Root, Manifest),
-            Result = ae_store:evolution({finish_build, Id, maps:get(<<"attempts">>, Job), maps:get(<<"id">>, Lease), Manifest}),
-            case Result of {ok, _} -> notify(Result, State); {error, Why} -> failed(reason(Why), <<>>, State) end;
-        #{<<"ok">> := false, <<"error">> := Reason, <<"diagnostics">> := Diagnostics}
-                when is_binary(Reason), byte_size(Reason) > 0, byte_size(Reason) =< 256, is_binary(Diagnostics) ->
-            failed(Reason, Diagnostics, State);
-        _ -> failed(<<"invalid_builder_result">>, <<>>, State)
+handle_info({host_build_result, Pid, {ok, Manifest}}, #{worker := Pid} = State) ->
+    #{config := #{root := Root}, id := Id, job := Job, lease := Lease} = State,
+    try
+        ok = ae_artifacts:verify(Root, Manifest),
+        case ae_store:evolution({finish_build, Id, maps:get(<<"attempts">>, Job), maps:get(<<"id">>, Lease), Manifest}) of
+            {ok, _} = Result -> notify(Result, State);
+            {error, Why} -> failed(reason(Why), <<>>, State)
+        end
     catch _:_ -> failed(<<"invalid_builder_result">>, <<>>, State) end;
+handle_info({host_build_result, Pid, {error, Why, Diagnostics}}, #{worker := Pid} = State) ->
+    failed(reason(Why), Diagnostics, State);
 handle_info(build_timeout, State) -> failed(<<"build_timeout">>, <<>>, State);
 handle_info({'DOWN', Ref, process, _, _}, #{parent := Ref} = State) ->
     failed(<<"build_owner_lost">>, <<>>, State);
@@ -39,7 +33,7 @@ handle_info(_, State) -> {noreply, State}.
 
 terminate(_, State) ->
     case maps:get(timer, State) of undefined -> ok; Timer -> erlang:cancel_timer(Timer) end,
-    case maps:get(port, State) of undefined -> ok; Port -> catch port_close(Port) end,
+    case maps:get(worker, State, undefined) of undefined -> ok; Worker -> exit(Worker, kill) end,
     case maps:get(directory, State) of undefined -> ok; Directory -> file:del_dir_r(Directory) end, ok.
 
 prepare(#{config := Config, id := Id} = State) ->
@@ -51,11 +45,10 @@ prepare(#{config := Config, id := Id} = State) ->
             case Job of
                 #{<<"status">> := <<"building">>, <<"attempts">> := Attempt, <<"limits">> := Limits} ->
                     ok = ae_artifacts:verify(maps:get(root, Config), maps:get(<<"artifact">>, maps:get(<<"baseline">>, Job))),
-                    Sandbox = maps:get(<<"sandbox_limits">>, Builder),
-                    Cpu = max(1, min(maps:get(<<"cpu_seconds">>, Sandbox) * 1000,
+                    Cpu = max(1, min(cpu_budget(Builder),
                         maps:get(<<"cpu_ms">>, Limits) - maps:get(<<"reserved_cpu_ms">>, Job, 0))),
                     Remaining = maps:get(<<"deadline">>, Job) - erlang:system_time(millisecond),
-                    Wall = min(min(maps:get(<<"wall_ms">>, Sandbox), maps:get(<<"build_ms">>, Limits)), max(1, Remaining div 2)),
+                    Wall = min(min(wall_budget(Builder), maps:get(<<"build_ms">>, Limits)), max(1, Remaining div 2)),
                     case ae_store:evolution({reserve_execution, Id, Attempt, <<"build">>, Cpu, Wall}) of
                         {ok, Lease} when is_map(Lease) ->
                             Reserved = State#{job := Job, lease := Lease},
@@ -74,15 +67,14 @@ launch(Builder, #{config := #{root := Root}, id := Id, job := Job, lease := Leas
     try
         Attempt = maps:get(<<"attempts">>, Job),
         Proposal = ae_store:evolution({attempt, Id, Attempt}),
-        Request = filename:join(Directory, "request.json"), Config = filename:join(Directory, "config.json"),
-        ok = file:write_file(Request, jsx:encode(#{<<"job">> => Job, <<"proposal">> => Proposal, <<"lease">> => Lease}), [exclusive]),
-        ok = file:change_mode(Request, 8#600),
-        ok = file:write_file(Config, jsx:encode(Builder), [exclusive]), ok = file:change_mode(Config, 8#600),
-        Helper = filename:join(code:priv_dir(ae_core), "ae_candidate.py"),
-        Port = open_port({spawn_executable, "/usr/bin/python3"}, [binary, exit_status, use_stdio,
-            {env, ae_os:clean_env()}, {args, [Helper, "--data-root", Root, "--request", Request, "--config", Config, "--watch-parent"]}]),
+        Parent = self(),
+        Worker = spawn_link(fun() ->
+            Result = try ae_host_build:build(Root, Job, Proposal, Lease, Builder, Directory)
+                catch _:_ -> {error, build_failed, <<>>} end,
+            Parent ! {host_build_result, self(), Result}
+        end),
         Timer = erlang:send_after(maps:get(<<"wall_ms">>, Lease), self(), build_timeout),
-        {ok, Next#{port := Port, timer := Timer}}
+        {ok, Next#{worker => Worker, timer := Timer}}
     catch _:_ -> {error, <<"builder_launch_failed">>, Next} end.
 
 failed(Reason, _Diagnostics, #{lease := undefined} = State) -> notify({error, Reason}, State);
@@ -98,6 +90,23 @@ reason(Reason) when is_binary(Reason) -> Reason.
 
 validate_config(Config) when is_map(Config) ->
     try
+        case maps:is_key(<<"sandbox_limits">>, Config) of
+            true -> validate_legacy_config(Config);
+            false -> validate_host_config(Config)
+        end,
+        {ok, Config}
+    catch _:_ -> {error, build_configuration_required} end;
+validate_config(_) -> {error, build_configuration_required}.
+
+validate_host_config(Config) ->
+    Keys = [<<"jsx_package">>, <<"source_bytes">>, <<"source_files">>, <<"artifact_bytes">>,
+        <<"output_bytes">>, <<"cpu_ms">>, <<"wall_ms">>],
+    true = lists:sort(maps:keys(Config)) =:= lists:sort(Keys),
+    Package = maps:get(<<"jsx_package">>, Config), true = is_binary(Package) andalso filename:pathtype(Package) =:= absolute,
+    true = lists:all(fun(K) -> V = maps:get(K, Config), is_integer(V) andalso V > 0 andalso V < (1 bsl 63) end,
+        Keys -- [<<"jsx_package">>]), ok.
+
+validate_legacy_config(Config) ->
         true = lists:sort(maps:keys(maps:remove(<<"resource_limits_mode">>, Config))) =:= lists:sort([<<"cgroup_root">>, <<"jsx_package">>,
             <<"source_bytes">>, <<"source_files">>, <<"artifact_bytes">>, <<"sandbox_limits">>]),
         true = lists:member(maps:get(<<"resource_limits_mode">>, Config, <<"cgroup">>), [<<"cgroup">>, <<"process">>]),
@@ -109,6 +118,9 @@ validate_config(Config) when is_map(Config) ->
         true = lists:sort(maps:keys(Limits)) =:= lists:sort([<<"memory_bytes">>, <<"pids">>, <<"cpu_percent">>,
             <<"cpu_seconds">>, <<"address_space_bytes">>, <<"file_bytes">>, <<"open_files">>, <<"output_bytes">>, <<"wall_ms">>]),
         true = lists:all(fun(V) -> is_integer(V) andalso V > 0 andalso V < (1 bsl 63) end, maps:values(Limits)),
-        {ok, Config}
-    catch _:_ -> {error, build_configuration_required} end;
-validate_config(_) -> {error, build_configuration_required}.
+        ok.
+
+cpu_budget(Config) -> case maps:find(<<"cpu_ms">>, Config) of
+    {ok, Value} -> Value; error -> maps:get(<<"cpu_seconds">>, maps:get(<<"sandbox_limits">>, Config)) * 1000 end.
+wall_budget(Config) -> case maps:find(<<"wall_ms">>, Config) of
+    {ok, Value} -> Value; error -> maps:get(<<"wall_ms">>, maps:get(<<"sandbox_limits">>, Config)) end.

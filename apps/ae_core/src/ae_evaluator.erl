@@ -7,7 +7,7 @@ start_link(Id, Config, Notify) -> gen_server:start_link(?MODULE, {Id, Config, No
 init({Id, Config, Notify}) ->
     self() ! start,
     {ok, #{id => Id, config => Config, notify => Notify, parent => monitor(process, Notify),
-        lease => undefined, job => undefined, directory => undefined, port => undefined, timer => undefined, output => <<>>}}.
+        lease => undefined, job => undefined, directory => undefined, timer => undefined}}.
 handle_call(_, _, State) -> {reply, {error, unsupported}, State}.
 handle_cast(_, State) -> {noreply, State}.
 handle_info(start, State) ->
@@ -15,28 +15,20 @@ handle_info(start, State) ->
         {ok, Next} -> {noreply, Next};
         {error, Reason, Next} -> failed(Reason, Next)
     catch _:_ -> failed(<<"evaluator_start_failed">>, State) end;
-handle_info({Port, {data, Data}}, #{port := Port, output := Acc} = State) ->
-    case byte_size(Acc) + byte_size(Data) =< 1048576 of
-        true -> {noreply, State#{output := <<Acc/binary, Data/binary>>}};
-        false -> failed(<<"evaluator_output_limit">>, State)
+handle_info({host_evaluation_result, Pid, {ok, Scorecard}}, #{worker := Pid} = State) ->
+    #{id := Id, job := Job, lease := Lease} = State,
+    case ae_store:evolution({finish_evaluation, Id, maps:get(<<"attempts">>, Job), maps:get(<<"id">>, Lease), Scorecard}) of
+        {ok, _} = Result -> notify(Result, State);
+        {error, Why} -> failed(reason(Why), State)
     end;
-handle_info({Port, {exit_status, Code}}, #{port := Port, output := Output} = State) ->
-    try jsx:decode(Output, [return_maps, strict]) of
-        #{<<"ok">> := true, <<"scorecard">> := Scorecard} when Code =:= 0 ->
-            #{id := Id, job := Job, lease := Lease} = State,
-            Result = ae_store:evolution({finish_evaluation, Id, maps:get(<<"attempts">>, Job), maps:get(<<"id">>, Lease), Scorecard}),
-            case Result of {ok, _} -> notify(Result, State); {error, Why} -> failed(reason(Why), State) end;
-        #{<<"ok">> := false, <<"error">> := Reason} when is_binary(Reason), byte_size(Reason) > 0, byte_size(Reason) =< 256 ->
-            failed(Reason, State);
-        _ -> failed(<<"invalid_evaluator_result">>, State)
-    catch _:_ -> failed(<<"invalid_evaluator_result">>, State) end;
+handle_info({host_evaluation_result, Pid, {error, Why}}, #{worker := Pid} = State) -> failed(reason(Why), State);
 handle_info(evaluation_timeout, State) -> failed(<<"evaluation_timeout">>, State);
 handle_info({'DOWN', Ref, process, _, _}, #{parent := Ref} = State) -> failed(<<"evaluation_owner_lost">>, State);
 handle_info(_, State) -> {noreply, State}.
 
 terminate(_, State) ->
     case maps:get(timer, State) of undefined -> ok; Timer -> erlang:cancel_timer(Timer) end,
-    case maps:get(port, State) of undefined -> ok; Port -> catch port_close(Port) end,
+    case maps:get(worker, State, undefined) of undefined -> ok; Worker -> exit(Worker, kill) end,
     case maps:get(directory, State) of undefined -> ok; Directory -> file:del_dir_r(Directory) end, ok.
 
 prepare(#{config := Config, id := Id} = State) ->
@@ -50,15 +42,12 @@ prepare(#{config := Config, id := Id} = State) ->
                     Root = maps:get(root, Config),
                     ok = ae_artifacts:verify(Root, maps:get(<<"artifact">>, maps:get(<<"baseline">>, Job))),
                     ok = ae_artifacts:verify(Root, maps:get(<<"built_artifact">>, Job)),
-                    Sandbox = maps:get(<<"sandbox_limits">>, Evaluator),
-                    Cpu = max(4, min(maps:get(<<"cpu_seconds">>, Sandbox) * 4000,
+                    Cpu = max(4, min(cpu_budget(Evaluator),
                         maps:get(<<"cpu_ms">>, Limits) - maps:get(<<"reserved_cpu_ms">>, Job, 0))),
                     Remaining = maps:get(<<"deadline">>, Job) - erlang:system_time(millisecond),
-                    Wall = min(min(maps:get(<<"wall_ms">>, Sandbox), maps:get(<<"evaluation_ms">>, Limits)), max(1, Remaining div 2)),
+                    Wall = min(min(wall_budget(Evaluator), maps:get(<<"evaluation_ms">>, Limits)), max(1, Remaining div 2)),
                     Encoded = jsx:encode(Evaluator),
-                    Binding = maps:from_list([{Key, file_hash(Name)} || {Key, Name} <-
-                        [{<<"harness_hash">>, "ae_evaluate.py"}, {<<"test_recipe_hash">>, "test_seed.escript"},
-                         {<<"sandbox_hash">>, "ae_sandbox.py"}, {<<"source_helper_hash">>, "ae_candidate.py"}]]),
+                    Binding = binding(Config),
                     Bound = Binding#{<<"configuration_hash">> => ae_policy:sha256(Encoded)},
                     case ae_store:evolution({reserve_evaluation, Id, Attempt, Cpu, Wall, Bound, Encoded}) of
                         {ok, Lease} when is_map(Lease) ->
@@ -76,18 +65,26 @@ launch(Encoded, #{config := #{root := Root}, job := Job, lease := Lease} = State
     ok = file:make_dir(Directory), ok = file:change_mode(Directory, 8#700),
     Next = State#{directory := Directory},
     try
-        Request = filename:join(Directory, "request.json"), Config = filename:join(Directory, "config.json"),
-        ok = file:write_file(Request, jsx:encode(#{<<"job">> => Job, <<"lease">> => Lease}), [exclusive]),
-        ok = file:change_mode(Request, 8#600),
-        ok = file:write_file(Config, Encoded, [exclusive]), ok = file:change_mode(Config, 8#600),
-        Helper = filename:join(code:priv_dir(ae_core), "ae_evaluate.py"),
-        Port = open_port({spawn_executable, "/usr/bin/python3"}, [binary, exit_status, use_stdio,
-            {env, ae_os:clean_env()}, {args, [Helper, "--data-root", Root, "--request", Request, "--config", Config, "--watch-parent"]}]),
+        Parent = self(), EvalConfig = jsx:decode(Encoded, [return_maps, strict]),
+        Worker = spawn_link(fun() ->
+            Result = try ae_host_evaluate:evaluate(Root, Job, Lease, EvalConfig, Directory)
+                catch _:_ -> {error, evaluation_failed} end,
+            Parent ! {host_evaluation_result, self(), Result}
+        end),
         Timer = erlang:send_after(maps:get(<<"wall_ms">>, Lease), self(), evaluation_timeout),
-        {ok, Next#{port := Port, timer := Timer}}
+        {ok, Next#{worker => Worker, timer := Timer}}
     catch _:_ -> {error, <<"evaluator_launch_failed">>, Next} end.
 
 file_hash(Name) -> {ok, Bytes} = file:read_file(filename:join(code:priv_dir(ae_core), Name)), ae_policy:sha256(Bytes).
+binding(Config) ->
+    host = maps:get(runtime_isolation, Config, host),
+    #{<<"harness_hash">> => module_hash([ae_host_evaluate, ae_host_metrics, ae_protocol, ae_policy]),
+            <<"test_recipe_hash">> => file_hash("test_seed.escript"),
+            <<"sandbox_hash">> => module_hash([ae_host_eval_runtime, ae_host_command]),
+            <<"source_helper_hash">> => module_hash([ae_host_source, ae_git_stream, ae_patch])}.
+module_hash(Modules) ->
+    Bytes = [begin {Module, Data, _} = code:get_object_code(Module), Data end || Module <- Modules],
+    ae_policy:sha256(iolist_to_binary(Bytes)).
 failed(Reason, #{lease := undefined} = State) -> notify({error, Reason}, State);
 failed(Reason, #{id := Id, lease := Lease, job := Job} = State) ->
     _ = ae_store:evolution({execution_failed, Id, maps:get(<<"attempts">>, Job), <<"evaluate">>,
@@ -98,6 +95,22 @@ reason(Reason) when is_binary(Reason) -> Reason.
 
 validate_config(Config) ->
     try
+        case maps:is_key(<<"sandbox_limits">>, Config) of
+            true -> validate_legacy_config(Config);
+            false -> validate_host_config(Config)
+        end,
+        true = bounded(maps:get(<<"startup_ms">>, Config), 1, 30000) andalso bounded(maps:get(<<"turn_ms">>, Config), 1, 300000),
+        true = valid_policy(maps:get(<<"policy">>, Config)), {ok, Config}
+    catch _:_ -> {error, evaluation_configuration_required} end.
+
+validate_host_config(Config) ->
+    true = exact(Config, [<<"source_bytes">>, <<"source_files">>, <<"artifact_bytes">>, <<"output_bytes">>,
+        <<"cpu_ms">>, <<"wall_ms">>, <<"startup_ms">>, <<"turn_ms">>, <<"policy">>]),
+    true = lists:all(fun(K) -> bounded(maps:get(K, Config), 1, (1 bsl 63) - 1) end,
+        [<<"source_bytes">>, <<"source_files">>, <<"artifact_bytes">>, <<"output_bytes">>, <<"cpu_ms">>, <<"wall_ms">>]),
+    ok.
+
+validate_legacy_config(Config) ->
         true = exact(maps:remove(<<"resource_limits_mode">>, Config), [<<"cgroup_root">>, <<"source_bytes">>, <<"source_files">>, <<"artifact_bytes">>,
             <<"sandbox_limits">>, <<"startup_ms">>, <<"turn_ms">>, <<"policy">>]),
         true = lists:member(maps:get(<<"resource_limits_mode">>, Config, <<"cgroup">>), [<<"cgroup">>, <<"process">>]),
@@ -105,13 +118,16 @@ validate_config(Config) ->
         absolute = filename:pathtype(maps:get(<<"cgroup_root">>, Config)),
         true = lists:all(fun(K) -> bounded(maps:get(K, Config), 1, (1 bsl 63) - 1) end,
             [<<"source_bytes">>, <<"source_files">>, <<"artifact_bytes">>]),
-        true = bounded(maps:get(<<"startup_ms">>, Config), 1, 30000) andalso bounded(maps:get(<<"turn_ms">>, Config), 1, 300000),
         Limits = maps:get(<<"sandbox_limits">>, Config),
         true = exact(Limits, [<<"memory_bytes">>, <<"pids">>, <<"cpu_percent">>, <<"cpu_seconds">>,
             <<"address_space_bytes">>, <<"file_bytes">>, <<"open_files">>, <<"output_bytes">>, <<"wall_ms">>]),
         true = lists:all(fun(V) -> bounded(V, 1, (1 bsl 63) - 1) end, maps:values(Limits)),
-        true = valid_policy(maps:get(<<"policy">>, Config)), {ok, Config}
-    catch _:_ -> {error, evaluation_configuration_required} end.
+        ok.
+
+cpu_budget(Config) -> case maps:find(<<"cpu_ms">>, Config) of
+    {ok, Value} -> Value; error -> maps:get(<<"cpu_seconds">>, maps:get(<<"sandbox_limits">>, Config)) * 4000 end.
+wall_budget(Config) -> case maps:find(<<"wall_ms">>, Config) of
+    {ok, Value} -> Value; error -> maps:get(<<"wall_ms">>, maps:get(<<"sandbox_limits">>, Config)) end.
 
 valid_policy(Policy) ->
     true = exact(Policy, [<<"version">>, <<"repetitions">>, <<"min_success_delta_ppm">>, <<"max_success_regression_ppm">>,
@@ -187,7 +203,8 @@ valid_result(Result, Job, Lease) ->
         true = text(maps:get(<<"uncertainty">>, Result), 256),
         true = valid_measurement(maps:get(<<"baseline">>, Result)) andalso valid_measurement(maps:get(<<"candidate">>, Result)),
         Gates = maps:get(<<"gates">>, Result),
-        true = exact(Gates, [<<"isolation">>, <<"candidate_tests">>, <<"baseline_contract">>, <<"candidate_contract">>, <<"rollback_restore">>]),
+        CommonGates = [<<"candidate_tests">>, <<"baseline_contract">>, <<"candidate_contract">>, <<"rollback_restore">>],
+        true = exact(Gates, [<<"isolation">> | CommonGates]) orelse exact(Gates, [<<"host_execution">> | CommonGates]),
         true = lists:all(fun is_boolean/1, maps:values(Gates)),
         Passed = maps:get(<<"passed">>, Result),
         is_boolean(Passed) andalso (not Passed orelse (lists:all(fun(V) -> V end, maps:values(Gates)) andalso

@@ -124,7 +124,7 @@ stage_candidate(Request, Limits, #{config := #{root := Root} = Config} = Data) -
         Digest = case Request of
             {manual, Value} -> Value;
             {evolution, EvolutionId} ->
-                bubblewrap = maps:get(runtime_isolation, Config, development),
+                host = maps:get(runtime_isolation, Config, host),
                 Evolution = ae_store:evolution({get, EvolutionId}),
                 maps:get(<<"digest">>, maps:get(<<"built_artifact">>, Evolution)) end,
         Manifest = ae_artifacts:load(Root, Digest),
@@ -132,16 +132,14 @@ stage_candidate(Request, Limits, #{config := #{root := Root} = Config} = Data) -
         ok = ae_artifacts:verify_parent(Root, Manifest, maps:get(<<"artifact">>, Base)),
         Created = case Request of
             {manual, _} -> ae_store:new_deployment(Base, Manifest, Limits);
-            {evolution, EId} -> ae_store:new_evolution_deployment(Base, EId, Manifest, Limits, maps:get(sandbox_limits, Config)) end,
+            {evolution, EId} -> ae_store:new_evolution_deployment(Base, EId, Manifest, Limits, host) end,
         case Created of
             {ok, Job} ->
                 Id = maps:get(<<"id">>, Job),
                 Spec = #{<<"slot">> => maps:get(<<"target_slot">>, Job), <<"artifact">> => Manifest},
                 try
                     RuntimeConfig = case maps:find(<<"staging_execution">>, Job) of
-                        {ok, Lease} -> Config#{sandbox_limits := maps:get(<<"runtime_limits">>, Lease),
-                            runtime_cpu_budget_ms => maps:get(<<"cpu_ms">>, Lease),
-                            runtime_deadline => maps:get(<<"expires_at_ms">>, Lease)};
+                        {ok, Lease} -> Config#{runtime_deadline => maps:get(<<"expires_at_ms">>, Lease)};
                         error -> Config end,
                     {ok, Candidate} = ae_runtime_sup:start_runtime(Root, Spec, RuntimeConfig),
                     try

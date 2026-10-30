@@ -2,7 +2,7 @@
 import importlib.util
 from pathlib import Path
 
-_path = Path(__file__).resolve().parent.parent / "apps/ae_core/priv/ae_build_inputs.py"
+_path = Path(__file__).resolve().parent / "ae_build_inputs.py"
 _spec = importlib.util.spec_from_file_location("ae_build_inputs", _path)
 _inputs = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(_inputs)

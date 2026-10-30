@@ -3,8 +3,8 @@
 -mode(compile).
 -include_lib("kernel/include/file.hrl").
 
-%% Trusted fixed recipe. Generated source/compiler hooks must execute this
-%% program ONLY through ae_sandbox, with source/dependencies mounted read-only.
+%% Fixed recipe for retained source and the pinned dependency. Generated code
+%% runs on the host with the controller user's privileges.
 main([Source, Dependency, Revision, Tree, Parent, DependencyHash, RecipeHash, Output]) ->
     true = hex(Revision, 40) andalso hex(Tree, 40) andalso hex(DependencyHash, 64) andalso hex(RecipeHash, 64),
     true = Parent =:= "-" orelse hex(Parent, 64),

@@ -10,7 +10,7 @@ and staging, then waits for explicit operator approval. Evolution is disabled by
 default. Publication, partial collection and deployment boundaries have
 SIGKILL recovery coverage.
 The fixed reproducible seed recipe is available separately; see [BUILD.md](BUILD.md).
-That guide also describes the supervised isolated builder, durable execution
+That guide also describes the supervised host builder, durable execution
 leases, and the gate that keeps its unevaluated output out of production.
 Operator backup/restore and its local recovery drill are in [RECOVERY.md](RECOVERY.md).
 The supervised independent evaluator and durable scorecards are implemented;
@@ -24,16 +24,11 @@ the routing/store transaction, including observation completion and rollback.
 Approval expiry is capped by the job deadline, and promotion must leave enough
 budget for observation. Authoring remains bound to the original author, even
 after the candidate has become active.
-Before staging, the store reserves the lesser of the remaining aggregate job
-CPU budget and the configured runtime CPU ceiling. The reservation survives
-restart and is never refunded. Memory/process limits are clamped to job limits;
-startup and the sandbox watchdog share the absolute lease deadline. Approval and
-observation cannot outlive that runtime lease. Promotion does not relax these
-limits: the same process retains its lease, and any later ordinary recovery uses
-fresh runtime limits under a new epoch. Aggregate lifetime CPU enforcement
-requires the cgroup profile; the v0.1 host process profile retains pessimistic
-reservations, per-process limits, and the absolute wall deadline without claiming
-aggregate CPU/memory/process enforcement.
+Before staging, the store reserves the remaining job CPU allowance and records
+an execution lease. The reservation is accounting; host CPU, memory and process
+usage are not OS-enforced. Approval and observation are bounded by the job
+and staging deadlines. Generated code and tests run as the controller user and
+can affect host resources; see [Host execution](HOST_EXECUTION.md).
 
 ## Operator commands and recovery
 
@@ -43,14 +38,10 @@ Enabling requires `AE_EVOLUTION_ENABLED=true`, complete
 timeouts (`AE_APPROVAL_TTL_MS`, `AE_OBSERVE_MS`, `AE_HEALTH_INTERVAL_MS`,
 `AE_QUIESCE_TIMEOUT_MS`). An explicit `AE_RETENTION_POLICY_JSON` is also required;
 the supported preservation policy and disk-pressure gate are documented in
-[RETENTION.md](RETENTION.md). The runtime must use Bubblewrap and explicit sandbox
-limits as documented in [ISOLATION.md](ISOLATION.md). For v0.1 host execution,
-select `AE_RESOURCE_LIMITS_MODE=process` and `resource_limits_mode: process` in
-both builder/evaluator JSON configurations. Delegated cgroups are optional for
-the stronger profile and are no longer an MVP prerequisite.
-Missing or invalid evolution configuration leaves ordinary service available
-and makes a trigger return `evolution_disabled`; an operator enable request
-returns `evolution_not_configured`. There is no generated-code host fallback.
+[RETENTION.md](RETENTION.md). Generated code executes on the host. Missing or
+invalid evolution configuration leaves ordinary service available and makes a
+trigger return `evolution_disabled`; an operator enable request returns
+`evolution_not_configured`.
 
 The operator CLI accepts:
 
@@ -98,7 +89,7 @@ observations roll back. Promotion restore and rollback intent are durable before
 checkpoint/replay. Retrying an already committed rollback does not stop the
 restored active runtime. `test/integration/evolution_crash.py` kills the whole
 controller during a reserved model call, pending generated approval, and
-observation after a candidate acknowledges a reply. Real restricted runtimes
+observation after a candidate acknowledges a reply. Host runtimes
 recover with fresh epochs, retain reservations and code, refuse stale approvals,
 and replay acknowledged replies without another provider call. Unknown authoring
 is not reissued; precommit approval is rejected; unobserved committed code rolls
@@ -185,9 +176,8 @@ pagination/ranges, structured patch submission, complete-file edit assembly,
 incomplete-edit feedback and retry without a budget reset, proposal/call deduplication,
 unknown-call denial, budget exhaustion, protected paths, prose-only rejection,
 required usage accounting, and continued conversation service. The native suite
-also executes restricted host builds/evaluations and generated
-promotion/rollback with the process profile. `AE_TEST_RESOURCE_LIMITS_MODE=cgroup`
-and `AE_TEST_CGROUP_ROOT` select the stronger profile. `orchestrated-rollback` uses the state machine to
+also executes host builds, evaluations and generated promotion/rollback.
+`orchestrated-rollback` uses the state machine to
 repair a real compile failure, reach explicit approval, preserve acknowledged
 work through candidate crash/rollback, and verify persistent disable/re-enable
 across restart. Fixture authoring does not establish live-model authoring quality.
@@ -198,11 +188,12 @@ across restart. Fixture authoring does not establish live-model authoring qualit
 same SQLite transaction mechanism as routing and conversation. New tables retain
 jobs, proposal fingerprints/patch hashes, accepted attempts, and LLM reservations.
 The ledger implements proposing, accepted-for-build, testing, evaluated, bounded
-repair, rejection, and cancellation. Supervised workers perform isolated builds
+repair, rejection, and cancellation. Supervised workers perform host builds
 and evaluations; linked deployment transitions cover staging, manual approval,
 quiescence, durable promotion/rollback intent, observation, completion, rejection,
 and rollback. The orchestrator observes these durable records and owns supervised
-workers; private test configuration remains unavailable to the authoring agent.
+workers. Synthetic case data is not sent through ordinary authoring messages,
+but host execution does not enforce secrecy from generated code.
 
 Creating a job requires a trusted `origin_ref`, objective, the committed active
 slot/runtime/generation/source/epoch, and a complete validated limits map. There
@@ -263,9 +254,8 @@ renames, binary patches, symlink modes, dependency/application manifests, and
 protected trees. Protected patch violations are terminal and retain an audit
 hash. This lexical gate is necessary but insufficient: the builder must still
 verify the base tree, reject symlinks/submodules in the workspace, apply/check
-the patch with Git, and execute every compiler hook/test in the OS sandbox.
+the patch with Git, and execute compiler hooks and tests on the host.
 
 The tests cover reservation/repair persistence, retransmissions and conflicting
 IDs, baseline replacement, source budgets, expiry, protected paths, paginated
-disclosure, and ranges in a 1.2 MB source fixture. These checks are not evidence
-of an implemented end-to-end self-evolution loop.
+disclosure, and ranges in a 1.2 MB source fixture. The host integration suite also exercises the end-to-end evolution loop.

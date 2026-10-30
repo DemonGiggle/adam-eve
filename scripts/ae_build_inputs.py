@@ -1,7 +1,6 @@
-"""Pinned inputs for the fixed seed recipe. Host builds here are trusted/manual.
+"""Pinned inputs for the standalone manual-publication tools.
 
-The generated-code builder must run the recipe with ae_sandbox.run(), not call
-build_manual() on a controller host. No candidate build scripts are invoked.
+The Erlang controller has its own host builder and does not invoke this module.
 """
 from contextlib import contextmanager
 import hashlib
@@ -14,7 +13,7 @@ import tarfile
 import tempfile
 
 PACKAGE_SHA256 = "0c5cc8fdc11b53cc25cf65ac6705ad39e54ecc56d1c22e4adb8f5a53fb9427f3"
-RECIPE = Path(__file__).resolve().parent / "build_seed.escript"
+RECIPE = Path(__file__).resolve().parent.parent / "apps/ae_core/priv/build_seed.escript"
 
 
 @contextmanager
@@ -59,7 +58,7 @@ def recipe_arguments(source, dependency, revision, tree, parent, output):
 def build_manual(source, revision, tree, parent, output, *, trusted_manual=False):
     """Compile only explicitly trusted manual source, without a sandbox fallback."""
     if trusted_manual is not True:
-        raise RuntimeError("generated source must use the OS sandbox; explicit manual trust is required")
+        raise RuntimeError("standalone manual publication requires explicit manual trust")
     executable = shutil.which("escript")
     if executable is None:
         raise RuntimeError("Erlang escript is required")

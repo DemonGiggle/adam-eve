@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Opt-in real-Ollama, restricted-runtime Phase 2 acceptance demonstration.
+"""Opt-in real-Ollama host-execution Phase 2 acceptance demonstration.
 
-The caller explicitly supplies a local inference service, an isolation profile,
-and a new private data root. Outputs remain there for independent inspection.
+The caller explicitly supplies a local inference service and a new private data
+root. Generated code runs as the controller user. Outputs remain for inspection.
 This is never part of the fixture-only default suite.
 """
 import argparse
@@ -82,20 +82,15 @@ def main():
     args = parser.parse_args()
     root = args.data_root.absolute()
     assert not root.exists(), "demonstration requires a new identity"
-    assert os.environ.get("AE_RUNTIME_ISOLATION") == "bubblewrap"
-    cgroup = os.environ.get("AE_CGROUP_ROOT", "/sys/fs/cgroup")
-    resource_mode = os.environ.get("AE_RESOURCE_LIMITS_MODE", "process")
+    assert os.environ.get("AE_RUNTIME_ISOLATION", "host") in ("host", "development")
     model = os.environ["AE_LIVE_LLM_MODEL"]
     assert model != "fixture"
     model_digest = os.environ["AE_LIVE_MODEL_DIGEST"]
     assert len(model_digest) == 64 and all(character in "0123456789abcdef" for character in model_digest)
     url = os.environ.get("AE_LIVE_LLM_URL", "http://127.0.0.1:11434/api/chat")
     package = os.environ.get("AE_JSX_PACKAGE", str(Path.home() / ".cache/rebar3/hex/hexpm/packages/jsx-3.1.0.tar"))
-    sandbox = {"memory_bytes": 536870912, "pids": 64, "cpu_percent": 100, "cpu_seconds": 90,
-        "address_space_bytes": 1073741824, "file_bytes": 33554432, "open_files": 128,
-        "output_bytes": 16777216, "wall_ms": 180000}
-    builder = {"cgroup_root": cgroup, "resource_limits_mode": resource_mode, "jsx_package": package, "source_bytes": 2097152,
-        "source_files": 128, "artifact_bytes": 8388608, "sandbox_limits": sandbox}
+    builder = {"jsx_package": package, "source_bytes": 2097152, "source_files": 128,
+        "artifact_bytes": 8388608, "output_bytes": 16777216, "cpu_ms": 90000, "wall_ms": 180000}
     limits = {"max_attempts": 3, "total_ms": 2100000, "max_llm_calls": 16,
         "tokens_per_call": 32768, "max_tokens": 524288, "cost_per_call_microunits": 0,
         "max_cost_microunits": 0, "max_patch_bytes": 65536, "max_diagnostic_bytes": 4096,
@@ -105,21 +100,21 @@ def main():
     settings = {"AE_LLM_MODEL": model, "AE_LLM_URL": url, "AE_LLM_TIMEOUT_MS": "300000",
         "AE_EVOLUTION_LLM_TIMEOUT_MS": os.environ.get("AE_EVOLUTION_LLM_TIMEOUT_MS", "900000"),
         "AE_RETENTION_POLICY_JSON": json.dumps({"promoted_generations": "all", "rejected_attempts": "all", "audit": "all"}),
-        "AE_RESOURCE_LIMITS_MODE": resource_mode,
+        "AE_RUNTIME_ISOLATION": "host",
         "AE_EVOLUTION_ENABLED": "true", "AE_EVOLUTION_LIMITS_JSON": json.dumps(limits),
         "AE_BUILD_CONFIG_JSON": json.dumps(builder), "AE_APPROVAL_TTL_MS": "120000",
         "AE_OBSERVE_MS": "10000", "AE_HEALTH_INTERVAL_MS": "250", "AE_QUIESCE_TIMEOUT_MS": "5000"}
     subprocess.run([str(CHECKOUT / "scripts/publish_seed"), "--data-root", str(root)], check=True)
     baseline = json.loads((root / "bootstrap.json").read_bytes())
     evidence = {"model": model, "model_digest": model_digest,
-        "resource_limits_mode": resource_mode,
+        "execution_mode": "host",
         "controller_revision": os.environ.get("AE_LIVE_CONTROLLER_REVISION"),
         "baseline": baseline, "generations": []}
     persist(root, "live-demonstration.json", evidence)
     for generation in (1, 2):
         evaluation = {key: value for key, value in builder.items() if key != "jsx_package"}
         evaluation.update({"startup_ms": 30000, "turn_ms": 15000, "policy": comparison(generation),
-            "sandbox_limits": {**sandbox, "wall_ms": 600000, "cpu_seconds": 60}})
+            "wall_ms": 600000, "cpu_ms": 240000})
         settings["AE_EVAL_CONFIG_JSON"] = json.dumps(evaluation)
         controller = LiveController(root, 0, settings)
         try:

@@ -1,7 +1,7 @@
 # adam-eve
 
 [![Erlang/OTP 24+](https://img.shields.io/badge/Erlang%2FOTP-24%2B-A90533?logo=erlang&logoColor=white)](https://www.erlang.org/)
-[![Platform: Linux](https://img.shields.io/badge/platform-Linux-FCC624?logo=linux&logoColor=black)](docs/ISOLATION.md)
+[![Platform: Linux](https://img.shields.io/badge/platform-Linux-FCC624?logo=linux&logoColor=black)](docs/HOST_EXECUTION.md)
 [![CI](https://github.com/DemonGiggle/adam-eve/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/DemonGiggle/adam-eve/actions/workflows/ci.yml)
 
 > A self-evolving AI agent built on Erlang/OTP
@@ -13,13 +13,12 @@ independent checks and explicit approval before promotion.
 ## Features
 
 - **Durable conversations** with replay, bounded retries, and persistent memory.
-- **Controlled evolution** with isolated candidate builds, evaluation, approval,
+- **Controlled evolution** with host candidate builds, evaluation, approval,
   observation, and rollback.
 - **LLM providers** for Ollama, OpenAI-compatible APIs, OpenCode Go, and Anthropic.
 - **Telegram integration** for private chats, groups, forum topics, and photos.
 - **Recoverable state** with retained source and artifacts, backups, and fenced restore.
-- **Host execution** on Linux; complete aggregate resource enforcement is planned
-  for v0.2.
+- **Host execution** on Linux with no OS sandbox or aggregate resource enforcement.
 
 ## Supported providers
 
@@ -109,16 +108,16 @@ conversation provider.
 - [LLM providers](docs/PROVIDERS.md) — profiles, credentials, models, and thinking.
 - [Telegram](docs/TELEGRAM.md) — bot setup, allowlists, commands, and topics.
 
-Evolution is disabled by default. Enabling it requires explicit limits and a
-restricted runtime; see [Controlled evolution](docs/EVOLUTION.md) and
-[Isolation](docs/ISOLATION.md).
+Evolution is disabled by default. When enabled, generated code and tests run on
+the host with the controller user's permissions. See [Controlled evolution](docs/EVOLUTION.md)
+and [Host execution](docs/HOST_EXECUTION.md).
 
 ## Documentation
 
 - [Getting started and operation](docs/OPERATIONS.md) — build, CLI, configuration, and manual handoff.
 - [Controlled evolution](docs/EVOLUTION.md) — authoring, approval, and recovery.
 - [Building](docs/BUILD.md) and [evaluation](docs/EVALUATION.md) — candidate construction and checks.
-- [Isolation](docs/ISOLATION.md) — sandbox requirements and resource profiles.
+- [Host execution](docs/HOST_EXECUTION.md) — execution model and resource accounting.
 - [Memory](docs/MEMORY.md) — persistent facts and context.
 - [Backup and restore](docs/RECOVERY.md) and [retention](docs/RETENTION.md) — state and artifact management.
 - [Runtime protocol](docs/PROTOCOL.md) — controller and agent communication.
@@ -134,5 +133,4 @@ scripts/test
 ```
 
 The suite uses local provider fixtures. GitHub Actions runs the host suite on
-pushes and pull requests. Some sandbox checks require a delegated cgroup v2 test
-root and are skipped in CI; see [Isolation](docs/ISOLATION.md).
+pushes and pull requests.

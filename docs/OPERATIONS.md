@@ -4,8 +4,8 @@
 
 Build and run on Linux with Erlang/OTP 24+, rebar3, Git, Python 3, a C compiler,
 make, and SQLite development headers. Dependencies are pinned in the controller
-and seed `rebar.lock` files. The restricted sandbox also requires Bubblewrap,
-libseccomp and prlimit; see [Isolation](ISOLATION.md).
+and seed `rebar.lock` files. Python is used by standalone operator utilities and
+the integration test harness; the Erlang controller does not invoke Python.
 
 For a local Ollama model, start Ollama and install a model before submitting a
 turn. For example, run `ollama pull llama3.2:3b`. From the checkout, copy the
@@ -44,8 +44,8 @@ publisher creates it with mode 0700 if needed. Publish once per identity;
 restarts use the persisted active artifact rather than rebuilding it. The seed
 is a separate executable and does not load into the controller VM.
 
-The default development runtime is for trusted, manually built code. Generated
-candidates require the restricted backend. See [Isolation](ISOLATION.md) and
+Agent runtimes, generated builds, and candidate tests run on the host as the
+controller user. See [Host execution](HOST_EXECUTION.md) and
 [Controlled evolution](EVOLUTION.md) before enabling evolution.
 
 ## JSON command interface
@@ -111,8 +111,7 @@ scripts/publish_candidate --data-root "$AE_DATA_ROOT" \
 The publisher checks out the retained active revision in a disposable workspace,
 applies the patch, and records the parent in Git ancestry and the manifest. Only
 seed source and tests may change; manual patches are limited to 256 KiB. This
-command builds with the operator's permissions and is not an isolated builder
-for generated or untrusted code. The final stdout line is the artifact manifest;
+command builds with the operator's permissions. The final stdout line is the artifact manifest;
 build logs go to stderr. Publication does not change routing.
 
 In the existing `scripts/ae` session, stage its digest, inspect the returned
@@ -164,17 +163,13 @@ requests recovery after the cause is fixed.
 | `AE_OBSERVE_MS` | Required for handoff | Post-switch observation window |
 | `AE_HEALTH_INTERVAL_MS` | Required for handoff | Staged and active probe interval |
 | `AE_QUIESCE_TIMEOUT_MS` | Required for handoff | In-flight turn drain deadline |
-| `AE_RUNTIME_ISOLATION` | `development` | Trusted manual runtime or `bubblewrap` |
-| `AE_RESOURCE_LIMITS_MODE` | `cgroup` | Select `process` for the v0.1 host profile or `cgroup` for aggregate enforcement |
-| `AE_CGROUP_ROOT` | Required for cgroup profile | Delegated cgroup v2 subtree |
-| `AE_SANDBOX_LIMITS_JSON` | Required for Bubblewrap | Explicit limits; see [Isolation](ISOLATION.md) |
+| `AE_RUNTIME_ISOLATION` | `host` | Host execution; `development` is a legacy alias |
 | `AE_RETENTION_POLICY_JSON` | Required for evolution | Preservation policy; see [Retention](RETENTION.md) |
 
 See [LLM providers](PROVIDERS.md) for profile and credential options, and
 [Controlled evolution](EVOLUTION.md) for evolution, builder and evaluator
-configuration. Complete aggregate CPU, memory and process enforcement is
-planned for v0.2; the host process profile provides per-process limits and
-controller-enforced timeouts.
+configuration. CPU reservations are accounting, and memory/process budgets are
+not enforced as host limits. Controller operations use configured deadlines.
 
 ## Storage and verification
 
@@ -192,6 +187,5 @@ ERTS. See [Building](BUILD.md), [Runtime protocol](PROTOCOL.md),
 [Retention](RETENTION.md), and [Backup and restore](RECOVERY.md).
 
 Run the complete fixture-based test suite with `scripts/test`. It exercises
-controller and seed processes, provider adapters, Telegram, evolution, crash
-recovery and sandbox boundaries. Full aggregate cgroup checks require an
-explicitly delegated test subtree; see [Isolation](ISOLATION.md).
+controller and seed processes, provider adapters, Telegram, host evolution and
+crash recovery.

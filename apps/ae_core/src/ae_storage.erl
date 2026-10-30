@@ -1,5 +1,5 @@
 -module(ae_storage).
--export([validate_retention/1, preflight/2]).
+-export([validate_retention/1, preflight/2, available/1]).
 
 %% v0.1 retains the complete published history and audit. No historical delete
 %% policy is silently interpreted as permission to remove rollback resources.
@@ -22,9 +22,17 @@ preflight(#{root := Root, candidate_builder := Builder}, Limits) ->
         Durable = Attempts * (Source + Artifact + maps:get(<<"max_patch_bytes">>, Limits) * 6)
             + Calls * ae_protocol:max_bytes(),
         Required = maps:get(<<"disk_reserve_bytes">>, Limits) + 2 * (Durable + Source + Artifact + ae_protocol:max_bytes()),
-        {ok, Encoded} = ae_os:run("/usr/bin/python3", ["-I", "-c",
-            "import os,sys; s=os.statvfs(sys.argv[1]); print(s.f_bavail*s.f_frsize)", Root], 2000),
-        Free = binary_to_integer(Encoded),
+        {ok, Free} = available(Root),
         case Free >= Required of true -> ok; false -> {error, storage_pressure} end
     catch _:_ -> {error, storage_unavailable} end;
 preflight(_, _) -> {error, storage_unavailable}.
+
+available(Root) ->
+    try
+        {ok, Encoded} = ae_os:run("/usr/bin/df", ["--output=avail", "-B1", "--", Root], 2000),
+        Lines = binary:split(Encoded, <<"\n">>, [global]),
+        true = length(Lines) =:= 2,
+        Free = binary_to_integer(string:trim(lists:last(Lines))),
+        true = Free >= 0,
+        {ok, Free}
+    catch _:_ -> {error, storage_unavailable} end.

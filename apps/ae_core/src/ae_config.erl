@@ -50,23 +50,10 @@ candidate_builder() ->
     catch _:_ -> undefined end.
 
 isolation() ->
-    case env("AE_RUNTIME_ISOLATION", "development") of
-        "development" -> #{runtime_isolation => development};
-        "bubblewrap" ->
-            ResourceMode = env("AE_RESOURCE_LIMITS_MODE", "cgroup"),
-            true = lists:member(ResourceMode, ["cgroup", "process"]),
-            CgroupRoot = case ResourceMode of
-                "cgroup" -> required("AE_CGROUP_ROOT");
-                "process" -> env("AE_CGROUP_ROOT", "/sys/fs/cgroup") end,
-            true = filename:pathtype(CgroupRoot) =:= absolute,
-            Limits = jsx:decode(list_to_binary(required("AE_SANDBOX_LIMITS_JSON")), [return_maps, strict]),
-            Keys = [<<"memory_bytes">>, <<"pids">>, <<"cpu_percent">>, <<"cpu_seconds">>,
-                <<"address_space_bytes">>, <<"file_bytes">>, <<"open_files">>, <<"output_bytes">>, <<"wall_ms">>],
-            true = lists:sort(maps:keys(Limits)) =:= lists:sort(Keys),
-            true = lists:all(fun(V) -> is_integer(V) andalso V > 0 andalso V < (1 bsl 63) end, maps:values(Limits)),
-            #{runtime_isolation => bubblewrap, sandbox_cgroup_root => CgroupRoot, sandbox_limits => Limits,
-              resource_limits_mode => list_to_binary(ResourceMode)}
-    end.
+    %% `development` was the old trusted-host profile; retain its spelling as
+    %% a host alias. Explicit sandbox requests must never silently fall back.
+    true = lists:member(env("AE_RUNTIME_ISOLATION", "host"), ["host", "development"]),
+    #{runtime_isolation => host}.
 
 handoff_limits() ->
     try

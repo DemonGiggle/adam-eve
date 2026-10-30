@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Exercise the operator CLI without granting generated code a host fallback."""
+"""Exercise fail-closed operator configuration and ordinary service."""
 import tempfile
 import subprocess
 import threading
@@ -16,7 +16,7 @@ def main():
         with tempfile.TemporaryDirectory(prefix="ae-evolution-control-") as directory:
             root = Path(directory)
             subprocess.run([str(CHECKOUT / "scripts/publish_seed"), "--data-root", str(root)], check=True)
-            # A requested enable cannot bypass missing limits or isolation.
+            # A requested enable cannot bypass missing configuration.
             for requested in ("false", "true"):
                 controller = Controller(root, provider.server_port, {
                     "AE_EVOLUTION_ENABLED": requested, "AE_RUNTIME_ISOLATION": "development",

@@ -53,11 +53,7 @@ def source_event(controller, request):
 def main():
     provider = ThreadingHTTPServer(("127.0.0.1", 0), Provider)
     threading.Thread(target=provider.serve_forever, daemon=True).start()
-    limits = {"memory_bytes": 536870912, "pids": 64, "cpu_percent": 100, "cpu_seconds": 600,
-        "address_space_bytes": 1073741824, "file_bytes": 33554432, "open_files": 128,
-        "output_bytes": 65536, "wall_ms": 1800000}
-    settings = {**SETTINGS, "AE_OBSERVE_MS": "10000", "AE_RUNTIME_ISOLATION": "bubblewrap",
-        "AE_RESOURCE_LIMITS_MODE": "process", "AE_SANDBOX_LIMITS_JSON": json.dumps(limits)}
+    settings = {**SETTINGS, "AE_OBSERVE_MS": "10000", "AE_RUNTIME_ISOLATION": "host"}
     controller = None
     def close_controller():
         nonlocal controller

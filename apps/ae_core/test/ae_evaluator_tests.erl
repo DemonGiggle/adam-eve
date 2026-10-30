@@ -12,6 +12,11 @@ explicit_policy_and_limits_test() ->
     ?assertEqual({ok, Config}, ae_evaluator:validate_config(Config)),
     Host = Config#{<<"resource_limits_mode">> => <<"process">>},
     ?assertEqual({ok, Host}, ae_evaluator:validate_config(Host)),
+    Native = #{<<"source_bytes">> => 2097152, <<"source_files">> => 128, <<"artifact_bytes">> => 8388608,
+        <<"output_bytes">> => 1048576, <<"cpu_ms">> => 60000, <<"wall_ms">> => 180000,
+        <<"startup_ms">> => 30000, <<"turn_ms">> => 15000, <<"policy">> => Policy},
+    ?assertEqual({ok, Native}, ae_evaluator:validate_config(Native)),
+    ?assertEqual({error, evaluation_configuration_required}, ae_evaluator:validate_config(maps:remove(<<"cpu_ms">>, Native))),
     [ ?assertEqual({error, evaluation_configuration_required}, ae_evaluator:validate_config(Bad)) || Bad <-
         [#{}, maps:remove(<<"turn_ms">>, Config), Config#{<<"cgroup_root">> := <<"relative">>},
          Config#{<<"resource_limits_mode">> => <<"automatic-fallback">>},

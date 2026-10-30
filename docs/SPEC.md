@@ -1,10 +1,10 @@
 # adam-eve — Self-Evolving AI Agent
 
 **Document:** Architecture and Software Requirements Specification\
-**Version:** 0.1 (MVP design, revision 3)\
+**Version:** 0.1 (experimental host design, revision 4)\
 **Status:** Draft\
 **Primary platform:** Erlang/OTP (BEAM)\
-**Guiding principle:** Start with a minimal agent; preserve a trusted substrate so that the agent can safely evolve its own replaceable implementation.
+**Guiding principle:** Start with a minimal agent and preserve a stable controller for replaceable implementations, while explicitly accepting host execution for this experiment.
 
 ## 1. Vision
 
@@ -14,7 +14,7 @@ Self-evolution means generating and running actual changes to agent application 
 
 Adam and Eve are deployment destinations in one continuing lineage, not independently evolving source branches. A runtime can be stopped or replaced without deleting its saved code or durable identity. This document specifies intended behavior; implementation milestones and evidence are defined in Sections 13–14.
 
-**Core rule:** *The agent may evolve its implementation; it may not unilaterally change the mechanism that judges, isolates, deploys, or rolls back that implementation.*
+**Execution model:** This experiment runs generated code on the host as the controller user. The normal protocol keeps authoring, judging, deployment, and rollback separate, but there is no OS boundary preventing generated code from accessing or modifying host resources.
 
 ## 2. Scope
 
@@ -22,7 +22,7 @@ Adam and Eve are deployment destinations in one continuing lineage, not independ
 
 - G1 — Bootstrap from a deliberately minimal seed agent, with only user I/O, LLM invocation, memory access, and a proposal interface.
 - G2 — Allow the active agent to generate source patches based on its current generation for deployment into the inactive slot.
-- G3 — Build and evaluate each candidate in an isolated environment before any production effect.
+- G3 — Build and evaluate each candidate using separate host processes and synthetic cases before normal promotion.
 - G4 — Switch user traffic between Adam and Eve without losing committed conversation state or acknowledged work.
 - G5 — Support failed-upgrade rollback and recovery from agent crashes.
 - G6 — Keep a reproducible audit trail of source revisions, artifacts, evaluations, memory schemas, and promotions.
@@ -32,25 +32,25 @@ Adam and Eve are deployment destinations in one continuing lineage, not independ
 ### Non-goals for v0.1
 
 - Training or modifying the underlying foundation model weights.
-- Allowing unrestricted self-modification of controller, security policy, validation harness, or production credentials.
+- Providing an OS security boundary against generated code or preventing it from accessing resources available to the controller user.
 - Zero interruption of every in-flight streamed response during a swap; MVP may finish or retry at well-defined boundaries.
 - Distributed multi-host consensus, multiple active identities, or autonomous privilege expansion.
 - Guaranteeing that every accepted code change improves general intelligence.
-- Complete kernel enforcement of aggregate CPU, memory, and process limits; this is deferred to v0.2. v0.1 retains namespace/filesystem/network isolation, broker authorization, bounded attempts and LLM spending, and controller-enforced timeouts. Per-process limits may provide additional protection without claiming aggregate enforcement.
+- OS sandboxing and kernel enforcement of aggregate CPU, memory, and process limits. Job reservations and operation deadlines are accounting and coordination, not host resource isolation.
 
 ## 3. Identity and Terms
 
 - **Logical agent:** One user-facing identity and one durable memory namespace across all generations.
 - **Slot:** Adam (`adam`) or Eve (`eve`); slot names are stable, but implementation versions change.
 - **Active:** The only slot eligible to receive new user turns and authorized side-effectful tools.
-- **Standby:** A candidate or previous version with no production side-effect privileges.
+- **Standby:** A candidate or previous version with no production broker authorization; host access is not restricted.
 - **Generation:** An immutable source/artifact version identified by content hash and lineage.
 - **Source revision:** A controller-created Git commit identifying the complete candidate agent source, with a protected reference that keeps its Git objects reachable.
 - **Artifact:** An immutable executable agent release identified by the digest of its actual contents; a Git commit alone is not an executable backup.
 - **Evolution job:** A durable record of an authorized objective, pinned baseline, proposal attempts, evaluation results, approval, and deployment outcome.
 - **Epoch:** Monotonically increasing routing/authorization version; stale epochs are rejected.
 - **Seed:** Smallest working implementation of the evolvable agent contract.
-- **Controller:** Immutable-for-agent trusted OTP application responsible for lifecycle and safety.
+- **Controller:** OTP application responsible for lifecycle, protocol checks, and recovery; host-executed code can access it with the same user permissions.
 
 ## 4. Architecture
 
@@ -65,8 +65,8 @@ flowchart TB
         Evolve <--> Store
         Broker[ae_tool_broker / policy] <--> Store
     end
-    Runner <--> Adam[Adam slot: isolated BEAM runtime]
-    Runner <--> Eve[Eve slot: isolated BEAM runtime]
+    Runner <--> Adam[Adam slot: host BEAM runtime]
+    Runner <--> Eve[Eve slot: host BEAM runtime]
     Adam -->|requests only| Broker
     Eve -->|requests only| Broker
     Evolve -->|candidate + tests| Builder
@@ -74,11 +74,18 @@ flowchart TB
     Store -->|checkpoint and memory| Runner
 ```
 
-### 4.1 Isolation boundary
+### 4.1 Host process boundary
 
-The control plane is a trusted Erlang/OTP release. **Each agent slot is a separate OS process/BEAM runtime, preferably an isolated container.** An OTP supervisor monitors a local runner/port-owner process, which monitors and manages the external runtime; a normal OTP supervisor does **not** directly supervise a remote BEAM node as a child. Candidate code must not be loaded into the controller VM.
+The control plane is a trusted Erlang/OTP application. Each agent slot runs in a
+separate BEAM OS process supervised through a local runner. Candidate code is
+not loaded into the controller VM. The processes share the controller user's
+host privileges, so this separation supports lifecycle management and is not a
+security sandbox. Generated code can access host files, network, processes, and
+credentials available to that user.
 
-Use authenticated local IPC (Unix domain socket for single-host MVP, with strict message schemas). Do not grant untrusted agent slots general distributed Erlang access to the controller: Erlang distribution is for mutually trusted nodes, not a sandbox or fine-grained capability boundary.
+The controller uses authenticated local IPC with strict message schemas. Broker
+checks and epoch fencing govern requests through that protocol; they cannot stop
+a same-user host process from acting outside it.
 
 ### 4.2 Trusted OTP components
 
@@ -107,15 +114,15 @@ Use authenticated local IPC (Unix domain socket for single-host MVP, with strict
 | `seed_evolver` | From Phase 2, read permitted source context and use the brokered LLM to author/revise structured source patches. |
 | `seed_contract` | Versioned wire protocol and state-envelope implementation. |
 
-The initial seed should have **no direct filesystem writes to a live deployment, no shell execution, and no privileged deployment API**. Its evolutionary capability is the ability to request a structured code patch, which the controller applies to an isolated candidate workspace.
+The initial seed should have **no direct filesystem writes to a live deployment, no shell execution, and no privileged deployment API**. Its evolutionary capability is the ability to request a structured code patch, which the controller applies to a separate candidate workspace. Generated code is not prevented from accessing the host directly.
 
 ### 4.4 Source context and authoring interface
 
 For each authorized evolution job, the controller provides an immutable view of the permitted source from the pinned active generation. The agent must be able to list allowed paths and read bounded file ranges, including permitted dependency manifests and public contract documentation. Large source trees must support paginated retrieval rather than relying on the full repository fitting into one LLM context.
 
-These operations use narrowly scoped broker capabilities such as `source_list`, `source_read`, and `evolution_status`. Requests are bound to the job, base artifact, authenticated active runtime, and epoch. They expose neither controller source/secrets nor private evaluator cases. The agent receives the objective, limits, prior attempt references, and sanitized build/test diagnostics through this interface; the broker performs and budgets LLM calls used for code authoring.
+These operations use narrowly scoped broker capabilities such as `source_list`, `source_read`, and `evolution_status`. Requests are bound to the job, base artifact, authenticated active runtime, and epoch. Those broker operations do not return controller source/secrets or private evaluator cases, but host execution does not prevent the agent from accessing them directly. The agent receives the objective, limits, prior attempt references, and sanitized build/test diagnostics through this interface; the broker performs and budgets LLM calls used for code authoring.
 
-The agent returns a bounded patch and structured rationale. The controller validates paths and patch size, applies the patch to a disposable workspace, and runs the build. No source-read or status operation grants repository-write, shell, deployment, or production-effect privileges. An agent may add tests in permitted agent-source paths; those tests supplement the trusted evaluation harness and cannot replace or weaken it.
+The agent returns a bounded patch and structured rationale. The controller validates paths and patch size, applies the patch to a disposable workspace, and runs the build. Source-read and status protocol operations do not grant repository-write, shell, deployment, or production-effect privileges. Agent-supplied tests supplement the evaluator in the normal workflow; host code is not prevented from altering it outside that workflow.
 
 ### 4.5 Cumulative generation lineage
 
@@ -128,13 +135,13 @@ The job pins the base generation, source revision, and epoch. The controller che
 ## 5. Mandatory invariants
 
 1. **Single active writer:** At most one runtime is authorized for a logical identity. The gateway and tool broker require the committed slot, runtime instance, and epoch, and reject stale instances/epochs. Replacing an active runtime must fence its predecessor with a new epoch even if its slot and artifact are unchanged.
-2. **Independent judge:** An agent cannot edit or execute its own production evaluation policy, secrets, controller, or deployment mechanism.
+2. **Separate judge:** The normal protocol uses a controller-owned evaluation policy and separate evaluation processes. Host execution does not enforce their secrecy or integrity against generated code.
 3. **Durable-before-ack:** A user turn or tool result is not acknowledged as committed until its durable event is saved.
 4. **No hidden process-state dependency:** Anything required for continuity must be present in durable events or versioned checkpoints.
 5. **Immutable artifacts:** Every promoted generation refers to a pinned, content-addressed, reproducible artifact.
 6. **Reversible routing:** Promotion never destroys the last known-good code or its compatible checkpoint.
-7. **Controlled effects:** Every external side effect goes through a broker with authorization, idempotency, and audit logging.
-8. **Bounded evolution:** Limit concurrent proposals, attempts, execution time, and LLM spending. Complete kernel enforcement of aggregate resource consumption is a v0.2 requirement; v0.1 must report the selected enforcement profile accurately and must not silently weaken isolation.
+7. **Brokered effects:** Effects requested through the broker use authorization, idempotency, and audit logging. Host processes can act outside the broker.
+8. **Budgeted evolution:** Limit concurrent proposals, attempts, operation deadlines, and brokered LLM spending. CPU reservations are accounting, and memory/process limits are not enforced on the host.
 9. **Cumulative source:** Every ordinary candidate has the pinned active generation as its source parent; slot reuse does not reset the source baseline.
 10. **Persist before activation:** Candidate source, executable contents, provenance, and required restore data must be durably published and verified before production routing can reference them.
 11. **Approval binding:** A production approval names a specific immutable artifact, baseline, capability manifest, and evaluation result. Any change invalidates that approval.
@@ -155,8 +162,8 @@ Failure paths: `building/testing → proposing` only for permitted repairs withi
 
 1. **Trigger:** A user command, recurring budgeted schedule, or regression signal requests improvement. Persist the initiator, objective, budgets, pinned active generation/source/epoch, and inactive target slot. Only one evolution job per logical identity is accepted; evolution can be disabled without disabling user service.
 2. **Propose:** Active slot reads the permitted source snapshot and uses the brokered LLM to generate an actual source patch. Record the base artifact/source revision, patch hash, hypothesis, expected benefit, risks, and test plan. All attempts in this job target its pinned active baseline; replacement patches are complete diffs against that baseline, not implicit edits to a previous attempt's workspace.
-3. **Build:** Controller checks patch scope, creates a new Git revision, compiles in a restricted sandbox, and runs static checks. Builds pin dependencies and toolchain inputs; dependency retrieval is controller-managed. Source-controlled build scripts, compiler hooks, and agent-supplied tests execute only inside the sandbox. Successful release contents are hashed and published with their provenance; partial output is never deployable.
-4. **Evaluate:** Controller runs unit, contract, security, replay, regression, and objective-specific behavioral tests using isolated/mock tools and synthetic or redacted state. Candidate cannot mutate production state.
+3. **Build:** Controller checks patch scope, creates a new Git revision, and compiles with a fixed recipe on the host. Builds pin dependencies and toolchain inputs. Compiler hooks and generated code run with the controller user’s host privileges. Successful releases are hashed and published with provenance; partial output is never deployable.
+4. **Evaluate:** Controller runs agent tests and baseline/candidate synthetic conversations in separate host processes with mock protocol tools. Host access is not isolated; candidates can affect production state outside the protocol.
 5. **Compare:** Candidate must satisfy hard safety invariants and meet an explicitly configured quality gate against the currently active baseline. Test definitions and private evaluation cases are not editable by candidates.
 6. **Stage:** Controller starts candidate in inactive slot, checks handshake, state schema compatibility, readiness, and simulated user turns against a disposable synthetic or redacted state copy. All production writes and effects remain disabled.
 7. **Approve:** Present the source diff, artifact digest, baseline, evaluation scorecard, capability manifest, and rollback evidence. Persist explicit human approval of that exact candidate in v0.1. Keep the current active serving while approval is pending; bound approval lifetime and staged resource use.
@@ -171,7 +178,7 @@ Failure paths: `building/testing → proposing` only for permitted repairs withi
 
 A candidate is promotable only if all are true:
 
-- Source scope, dependency locks, build provenance, and sandbox checks pass.
+- Source scope, dependency locks, build provenance, and host evaluation checks pass.
 - Required contract, memory-migration, failure-recovery, and security tests pass.
 - No measured blocking regression exceeds configured limits; at least one stated improvement criterion is met (or the change is an explicitly approved repair).
 - Controller can restore the last known-good version after a simulated candidate crash.
@@ -180,7 +187,7 @@ A candidate is promotable only if all are true:
 
 ### 6.4 Repair feedback and job recovery
 
-Failed builds or evaluations produce durable attempt records. A controller policy may return bounded compiler diagnostics, public test failures, and aggregate evaluation results to the active authoring agent for another proposal. Private test contents, credentials, and raw production data are never returned. Limit diagnostic size, revision attempts, aggregate LLM spending, and total job time; a repair loop is not a new unbudgeted evolution job. Record requested build/evaluation resource budgets and the enforcement profile; complete aggregate kernel resource enforcement is deferred to v0.2. Protected-path or privilege violations terminate the job in v0.1.
+Failed builds or evaluations produce durable attempt records. A controller policy may return bounded compiler diagnostics, public test failures, and aggregate evaluation results to the active authoring agent for another proposal. The normal feedback contains no private test contents, credentials, or raw production data, but same-user generated code can access host resources directly. Limit diagnostic size, revision attempts, aggregate LLM spending, and total job time; a repair loop is not a new unbudgeted evolution job. Record requested build/evaluation budgets and host execution; aggregate CPU, memory, and process limits are not enforced. Protected-path or privilege violations terminate the job in v0.1.
 
 On controller startup, reconcile durable jobs with the routing record, artifact registry, and actual runners before admitting work. A staged or approved candidate without a committed promotion remains standby. A committed promotion whose observation is incomplete resumes observation or rolls back according to trusted policy. Interrupted builds may restart from pinned inputs within the recorded budget; reservations must prevent a crash from resetting spending or attempt limits. A stale author runtime cannot resume authoring after its epoch has been fenced.
 
@@ -209,7 +216,7 @@ Communication uses framed JSON over a Unix domain socket in MVP; use versioned s
 - `checkpoint_ready {checkpoint_id, last_event_seq}`
 - `health_status {status, details}`
 
-The controller validates every message. Only it authorizes durable writes and external tool actions. Agent outputs are untrusted data. Explicitly reject stale epochs, unknown protocol versions, oversized input, and duplicate side effects. A response turn and its tool calls must be correlated with the original authenticated user request. Evolution messages and related broker calls must correlate with a durable job and its authenticated user request or controller-authorized trigger (`origin_ref`); an agent cannot create an authorized job by inventing an ID.
+The controller validates every message and authorizes writes and tool actions through its broker. Host code can act outside that protocol. Agent outputs are untrusted data. Explicitly reject stale epochs, unknown protocol versions, oversized input, and duplicate side effects. A response turn and its tool calls must be correlated with the original authenticated user request. Evolution messages and related broker calls must correlate with a durable job and its authenticated user request or controller-authorized trigger (`origin_ref`); an agent cannot create an authorized job by inventing an ID.
 
 Source/status broker calls use the existing `tool_request` envelope, with job/base references in `args`; responses and diagnostics use bounded broker result envelopes. Bind all requests to the authenticated IPC runtime as well as checking claimed fields. Persist proposal IDs and patch hashes so identical retransmission returns the existing attempt instead of consuming another build or applying the patch twice; reject reuse of a proposal ID with different contents.
 
@@ -268,19 +275,20 @@ Rollback changes executable code and routing; it does not rewind the authoritati
 
 For v0.1, keep durable event/checkpoint formats controller-owned and require both candidate and predecessor to read the state/events that either may commit during observation. Reject incompatible writes or destructive migrations. Schema evolution requiring more complex forward/backward migration is deferred unless independently tested for this rollback path. An old snapshot by itself is not sufficient rollback evidence if replay would discard acknowledged work.
 
-## 9. Capability security and sandboxing
+## 9. Host execution and protocol boundaries
 
-- **Trust zones:** (T0) immutable controller and policy; (T1) evaluator/build infrastructure; (T2) live agent with narrow broker access; (T3) untrusted candidate runtime.
-- **Filesystem:** Live/candidate agent filesystems read-only by default; candidate workspace writable only through controlled build and patch APIs.
-- **Source scope:** Resolve patch paths within the allowed agent source tree; reject traversal, symlink escapes, protected-file edits, and unapproved dependency/capability changes. Source context and repair diagnostics use the same disclosure allowlist.
-- **OS isolation:** Separate unprivileged user/container, restricted mounts/network/process visibility, controller-enforced timeouts, and no host credentials; use a real isolation boundary, not just Erlang processes. v0.1 may run directly on a namespace-capable host without delegated cgroups, with explicitly selected per-process limits. Complete aggregate CPU/memory/process enforcement and its kernel failure matrix are deferred to v0.2; selecting the stronger cgroup profile must still fail closed if delegation is unavailable.
-- **Network:** No general access by candidate; LLM requests and allowed external services are brokered and budgeted.
-- **Secrets:** Never put API tokens or signing keys into generated code, memory snapshots, or untrusted environment variables; secrets remain in controller-side secret storage.
-- **Tools:** Capability manifests are versioned and reviewed. No raw shell, deployment, source-repo write, or privilege escalation through generic tools.
-- **Prompt injection:** Retrieved pages, tool outputs, user messages, and repository content are untrusted inputs; they cannot override policy or modify protected files.
-- **Audit:** Record who/what initiated each proposal, patch hashes, tool effects, tests, approvals, epoch changes, and rollbacks.
+The controller validates source scope, proposal paths, broker capabilities, epoch
+fencing, and approval bindings. It records job budgets and audit events, and
+uses operation deadlines. These controls govern the normal protocol and do not
+sandbox generated code.
 
-OTP supervision handles process failures; it **does not** sandbox untrusted BEAM modules. Ordinary Erlang distribution should not be treated as a secure low-privilege control interface.
+Agent runtimes, compiler hooks, and tests execute on the host as the controller
+user. They can access or modify the controller, data, files, credentials, other
+processes, and network resources available to that user. Environment variables
+are cleared from child processes, but this does not enforce secret isolation.
+CPU reservations are accounting; memory, process, and aggregate CPU ceilings
+are not enforced. A process crash or untrusted host action can affect the host.
+See [HOST_EXECUTION.md](HOST_EXECUTION.md).
 
 ## 10. Quality and evaluation framework
 
@@ -293,7 +301,7 @@ Use EUnit and Common Test for OTP behavior/contract tests; use deterministic tes
 - Replay after restart yields exactly one committed user-turn record and no duplicate side effects.
 - Failed compilation, timeout, invalid state schema, broker denial, and candidate crash leave old active usable.
 - Incomplete/failed promotion recovers using durable epoch and artifact state after controller reboot.
-- Generated code cannot alter controller/policy/test harness or access host secrets.
+- The broker rejects protected source paths and unsupported capabilities; this is not an OS boundary against host-executed code.
 - An LLM-authored source patch changes executable behavior after build/promotion; a prose-only proposal does not satisfy self-evolution acceptance.
 - Adam `g1 →` Eve `g2 →` Adam `g3` uses `g2` as `g3`'s source parent and preserves the intended earlier improvements under regression tests.
 - Source reads and repair feedback expose only permitted data; stale baselines, conflicting proposal IDs, path escapes, and changed artifacts after approval are rejected. Identical proposal retransmissions reuse the existing attempt.
@@ -350,7 +358,7 @@ adam-eve/
 │   └── PROTOCOL.md
 └── scripts/
     ├── build_candidate
-    └── sandbox_test
+    └── host_execution_test
 ```
 
 Core and agent artifacts must be built and deployed independently. Agent build scripts are executed by the trusted builder, not by the production agent.
@@ -367,7 +375,7 @@ Operational storage is separate from this development checkout. A proposed contr
 └── workspaces/             # disposable per-attempt build directories
 ```
 
-Runtime mounts expose only the selected read-only release and explicitly permitted inputs, not this entire root. Backups must include all referenced durable content; workspaces are excluded. Backup copies must reside in a separate failure domain when host/disk-loss recovery is required.
+Host-executed runtimes can access files allowed by the controller user, including this root. Backups must include all referenced durable content; workspaces are excluded. Backup copies must reside in a separate failure domain when host/disk-loss recovery is required.
 
 ## 13. Phased implementation plan
 
@@ -388,7 +396,7 @@ Runtime mounts expose only the selected read-only release and explicitly permitt
 
 ### Phase 2 — Controlled self-evolution
 
-- Add `seed_evolver`, permitted source retrieval, structured LLM-authored patches, bounded repair feedback, isolated Git worktree/build, EUnit/Common Test/behavioral harness, durable provenance, scorecards, and artifact-bound manual approval.
+- Add `seed_evolver`, permitted source retrieval, structured LLM-authored patches, bounded repair feedback, separate Git worktree/host build, EUnit/Common Test/behavioral harness, durable provenance, scorecards, and artifact-bound manual approval.
 - Implement crash-safe source/artifact publication, protected source references, retention, and a backup/restore drill.
 - **Exit criterion:** Adam authors a bounded code change to its current source; independently test, explicitly approve, and promote it into Eve. Eve then authors another change from that promoted source; independently test, explicitly approve, and promote it into Adam. Verify cumulative behavior, retained source/releases after a full restart, and rollback without losing acknowledged work.
 
@@ -406,7 +414,7 @@ Runtime mounts expose only the selected read-only release and explicitly permitt
 1. One user-facing identity persists across both slot names and multiple code generations.
 2. Only the active epoch may execute broker-approved production effects.
 3. Conversation and pending tasks survive agent-process restart and A/B switching.
-4. Candidate builds/tests do not affect production memory, tools, or credentials.
+4. Candidate evaluations use synthetic protocol inputs; host code can nevertheless access or affect production resources.
 5. A candidate failing any required pre-promotion gate never displaces a healthy active generation; post-switch failures trigger tested rollback.
 6. Every promotion and rollback is a logged, durable, recoverable transition.
 7. At least one AI-authored patch can be compiled, independently tested, explicitly approved, and promoted.
@@ -425,7 +433,7 @@ project: adam-eve
 identity: default
 slots: [adam, eve]
 active_on_first_boot: adam
-agent_runtime: isolated_beam_os_process
+agent_runtime: host_beam_os_process
 transport: unix_socket_json_v1
 state_store: sqlite
 promotion: manual
@@ -439,12 +447,12 @@ artifact_store: persistent_content_addressed
 data_root: required_environment_configuration
 retain_promoted_generations: all
 approval_binding: artifact_baseline_capabilities_evaluation
-candidate_network: denied_by_default
-side_effects: broker_only
+candidate_network: host_user_access
+brokered_effects: epoch_fenced
 rollback: automatic_on_failed_health_gate
 ```
 
-Values for timeouts (including approval expiry), token/spending budgets, scoring thresholds, disk reserve, rejected-attempt/audit retention, and backup/recovery objectives must be explicitly defined by environment. Requested memory/CPU/process budgets and the enforcement profile must be recorded; complete aggregate enforcement is deferred to v0.2. Missing required v0.1 evolution limits must disable evolution rather than imply unlimited operation. Paths must resolve to controller-owned persistent storage; avoid inventing universal limits. QEMU or another VM is not a v0.1 deployment requirement.
+Values for timeouts (including approval expiry), token/spending budgets, scoring thresholds, disk reserve, rejected-attempt/audit retention, and backup/recovery objectives must be explicitly defined by environment. Requested budgets must be recorded; host CPU, memory, and process consumption are not enforced. Missing required v0.1 evolution limits must disable evolution rather than imply unlimited operation. Paths must resolve to controller-owned persistent storage; avoid inventing universal limits. QEMU or another VM is not a v0.1 deployment requirement.
 
 ## 16. Design choices requiring later decisions
 
@@ -453,7 +461,7 @@ Values for timeouts (including approval expiry), token/spending budgets, scoring
 - **Agent implementation language:** Begin with Erlang for contract simplicity; support other runtimes only after protocol stabilizes.
 - **Approval policy:** Manual for production MVP; bounded automatic promotion later.
 - **Memory retrieval:** Plain indexed messages/summaries first; vector search only when needed.
-- **Isolation:** Local unprivileged process for development, restricted containers for any autonomous or untrusted code execution.
+- **Host execution:** Generated code runs as the controller user without an OS sandbox for this experiment.
 
 ## 17. Erlang/OTP design references
 
@@ -463,4 +471,4 @@ Values for timeouts (including approval expiry), token/spending budgets, scoring
 - Erlang code loading/replacement: https://www.erlang.org/doc/system/code_loading.html
 - Erlang secure coding guidelines: https://www.erlang.org/docs/29/system/secure_coding.html
 
-**Implementation note:** Erlang supports in-VM hot upgrades, but adam-eve should prefer isolated runtime replacement for self-generated code. This is an architectural security choice, not a limitation of OTP's code-loading capabilities.
+**Implementation note:** Erlang supports in-VM hot upgrades; adam-eve uses separate BEAM processes for runtime replacement and recovery. These processes are not security-isolated from the host.

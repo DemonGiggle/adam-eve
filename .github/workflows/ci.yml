@@ -13,8 +13,6 @@ jobs:
     name: Host test suite
     runs-on: ubuntu-22.04
     timeout-minutes: 30
-    env:
-      AE_TEST_RESOURCE_LIMITS_MODE: process
     steps:
       - name: Check out source
         uses: actions/checkout@v7
@@ -24,7 +22,7 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y erlang rebar3 git python3 build-essential libsqlite3-dev bubblewrap libseccomp2
+          sudo apt-get install -y erlang rebar3 git python3 build-essential libsqlite3-dev
 
       - name: Run host tests
         run: scripts/test

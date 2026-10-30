@@ -20,7 +20,7 @@ configured(Config) ->
         {ok, _} = ae_storage:validate_retention(maps:get(retention_policy, Config)),
         ModelTimeout = maps:get(evolution_llm_timeout, Config, maps:get(llm_timeout, Config, 30000)),
         true = is_integer(ModelTimeout) andalso ModelTimeout >= 100 andalso ModelTimeout =< 3600000,
-        bubblewrap = maps:get(runtime_isolation, Config),
+        host = maps:get(runtime_isolation, Config),
         {ok, _} = ae_evolution_limits:validate(maps:get(evolution_limits, Config)),
         {ok, _} = ae_builder:validate_config(maps:get(candidate_builder, Config)),
         {ok, _} = ae_evaluator:validate_config(maps:get(candidate_evaluator, Config)),
