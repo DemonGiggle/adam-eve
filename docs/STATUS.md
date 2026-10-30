@@ -1,10 +1,17 @@
 # Implementation status against SPEC v0.1
 
-This report tracks the current implementation against SPEC v0.1 revision 2.
+This report tracks the current implementation against SPEC v0.1 revision 3.
 It describes implemented behavior
 and existing test evidence; it does not change the requirements in [SPEC.md](SPEC.md).
 The MVP is not complete. Evolution is disabled by default and can be explicitly
 enabled only with complete limits and the restricted runtime backend.
+
+The operator has deferred complete aggregate kernel CPU/memory/process
+enforcement to v0.2. Namespace/filesystem/network isolation, broker fencing,
+attempt/token/spending budgets, and timeouts remain v0.1 requirements. A host
+profile using per-process limits is being implemented so v0.1 verification no
+longer requires a VM or delegated cgroups. Existing cgroup checks remain useful
+v0.2 evidence rather than an MVP completion gate.
 
 ## Milestones
 

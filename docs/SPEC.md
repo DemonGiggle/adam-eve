@@ -1,7 +1,7 @@
 # adam-eve — Self-Evolving AI Agent
 
 **Document:** Architecture and Software Requirements Specification\
-**Version:** 0.1 (MVP design, revision 2)\
+**Version:** 0.1 (MVP design, revision 3)\
 **Status:** Draft\
 **Primary platform:** Erlang/OTP (BEAM)\
 **Guiding principle:** Start with a minimal agent; preserve a trusted substrate so that the agent can safely evolve its own replaceable implementation.
@@ -36,6 +36,7 @@ Adam and Eve are deployment destinations in one continuing lineage, not independ
 - Zero interruption of every in-flight streamed response during a swap; MVP may finish or retry at well-defined boundaries.
 - Distributed multi-host consensus, multiple active identities, or autonomous privilege expansion.
 - Guaranteeing that every accepted code change improves general intelligence.
+- Complete kernel enforcement of aggregate CPU, memory, and process limits; this is deferred to v0.2. v0.1 retains namespace/filesystem/network isolation, broker authorization, bounded attempts and LLM spending, and controller-enforced timeouts. Per-process limits may provide additional protection without claiming aggregate enforcement.
 
 ## 3. Identity and Terms
 
@@ -133,7 +134,7 @@ The job pins the base generation, source revision, and epoch. The controller che
 5. **Immutable artifacts:** Every promoted generation refers to a pinned, content-addressed, reproducible artifact.
 6. **Reversible routing:** Promotion never destroys the last known-good code or its compatible checkpoint.
 7. **Controlled effects:** Every external side effect goes through a broker with authorization, idempotency, and audit logging.
-8. **Bounded evolution:** Limit concurrent proposals, attempts, execution time, resource consumption, and spending.
+8. **Bounded evolution:** Limit concurrent proposals, attempts, execution time, and LLM spending. Complete kernel enforcement of aggregate resource consumption is a v0.2 requirement; v0.1 must report the selected enforcement profile accurately and must not silently weaken isolation.
 9. **Cumulative source:** Every ordinary candidate has the pinned active generation as its source parent; slot reuse does not reset the source baseline.
 10. **Persist before activation:** Candidate source, executable contents, provenance, and required restore data must be durably published and verified before production routing can reference them.
 11. **Approval binding:** A production approval names a specific immutable artifact, baseline, capability manifest, and evaluation result. Any change invalidates that approval.
@@ -179,7 +180,7 @@ A candidate is promotable only if all are true:
 
 ### 6.4 Repair feedback and job recovery
 
-Failed builds or evaluations produce durable attempt records. A controller policy may return bounded compiler diagnostics, public test failures, and aggregate evaluation results to the active authoring agent for another proposal. Private test contents, credentials, and raw production data are never returned. Limit diagnostic size, revision attempts, aggregate LLM spending, build/evaluation resources, and total job time; a repair loop is not a new unbudgeted evolution job. Protected-path or privilege violations terminate the job in v0.1.
+Failed builds or evaluations produce durable attempt records. A controller policy may return bounded compiler diagnostics, public test failures, and aggregate evaluation results to the active authoring agent for another proposal. Private test contents, credentials, and raw production data are never returned. Limit diagnostic size, revision attempts, aggregate LLM spending, and total job time; a repair loop is not a new unbudgeted evolution job. Record requested build/evaluation resource budgets and the enforcement profile; complete aggregate kernel resource enforcement is deferred to v0.2. Protected-path or privilege violations terminate the job in v0.1.
 
 On controller startup, reconcile durable jobs with the routing record, artifact registry, and actual runners before admitting work. A staged or approved candidate without a committed promotion remains standby. A committed promotion whose observation is incomplete resumes observation or rolls back according to trusted policy. Interrupted builds may restart from pinned inputs within the recorded budget; reservations must prevent a crash from resetting spending or attempt limits. A stale author runtime cannot resume authoring after its epoch has been fenced.
 
@@ -272,7 +273,7 @@ For v0.1, keep durable event/checkpoint formats controller-owned and require bot
 - **Trust zones:** (T0) immutable controller and policy; (T1) evaluator/build infrastructure; (T2) live agent with narrow broker access; (T3) untrusted candidate runtime.
 - **Filesystem:** Live/candidate agent filesystems read-only by default; candidate workspace writable only through controlled build and patch APIs.
 - **Source scope:** Resolve patch paths within the allowed agent source tree; reject traversal, symlink escapes, protected-file edits, and unapproved dependency/capability changes. Source context and repair diagnostics use the same disclosure allowlist.
-- **OS isolation:** Separate unprivileged user/container, restricted mounts/network/processes, CPU/memory/time limits, no host credentials; use a real isolation boundary, not just Erlang processes.
+- **OS isolation:** Separate unprivileged user/container, restricted mounts/network/process visibility, controller-enforced timeouts, and no host credentials; use a real isolation boundary, not just Erlang processes. v0.1 may run directly on a namespace-capable host without delegated cgroups, with explicitly selected per-process limits. Complete aggregate CPU/memory/process enforcement and its kernel failure matrix are deferred to v0.2; selecting the stronger cgroup profile must still fail closed if delegation is unavailable.
 - **Network:** No general access by candidate; LLM requests and allowed external services are brokered and budgeted.
 - **Secrets:** Never put API tokens or signing keys into generated code, memory snapshots, or untrusted environment variables; secrets remain in controller-side secret storage.
 - **Tools:** Capability manifests are versioned and reviewed. No raw shell, deployment, source-repo write, or privilege escalation through generic tools.
@@ -443,7 +444,7 @@ side_effects: broker_only
 rollback: automatic_on_failed_health_gate
 ```
 
-Values for timeouts (including approval expiry), memory/CPU/token budgets, scoring thresholds, disk reserve, rejected-attempt/audit retention, and backup/recovery objectives must be explicitly defined by environment. Missing required evolution limits must disable evolution rather than imply unlimited operation. Paths must resolve to controller-owned persistent storage; avoid inventing universal limits.
+Values for timeouts (including approval expiry), token/spending budgets, scoring thresholds, disk reserve, rejected-attempt/audit retention, and backup/recovery objectives must be explicitly defined by environment. Requested memory/CPU/process budgets and the enforcement profile must be recorded; complete aggregate enforcement is deferred to v0.2. Missing required v0.1 evolution limits must disable evolution rather than imply unlimited operation. Paths must resolve to controller-owned persistent storage; avoid inventing universal limits. QEMU or another VM is not a v0.1 deployment requirement.
 
 ## 16. Design choices requiring later decisions
 
