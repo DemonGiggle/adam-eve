@@ -16,6 +16,8 @@ compatibility tests. Existing identities and backup formats must remain usable.
 The revised full suite has passed synthetic authoring, failed-build repair,
 manual approval, promotion, crash, rollback, and controller crash-boundary tests.
 The removed sandbox and its delegated-cgroup tests do not apply to host
-execution. The old six-boundary candidate-publication SIGKILL test covered
-the removed Python publisher; equivalent deterministic fault-injection coverage
-for the Erlang candidate publisher remains to be implemented.
+execution. The Erlang candidate publisher now has deterministic SIGKILL coverage
+at six publication boundaries, including before file sync and before/after the
+atomic rename. The tests verify baseline availability, complete releases,
+idempotent recovery, and rejection of conflicting manifests. These process-crash
+tests do not simulate filesystem power loss.

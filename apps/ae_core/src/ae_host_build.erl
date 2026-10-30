@@ -39,7 +39,7 @@ build(Root, Job, Proposal, Lease, Config, Workspace) ->
                         <<"resource_limits_mode">> => <<"host">>, <<"recipe_sha256">> => RecipeHash,
                         <<"dependency">> => DependencyRecord}, <<"evaluation">> => null},
                 _ = remaining(Lease),
-                ok = ae_host_lock:with(Lock, remaining(Lease), fun() -> publish(Root, Executable, Manifest, Job) end),
+                ok = ae_host_publish:publish(Root, Executable, Manifest, Job),
                 {ok, Manifest};
             {error, {exit_status, _, Diagnostics}} ->
                 MaxDiagnostics = maps:get(<<"max_diagnostic_bytes">>, maps:get(<<"limits">>, Job)),
@@ -71,42 +71,6 @@ reserve(Root, Bytes, Job) ->
     {ok, Free} = ae_storage:available(Root),
     true = Free >= Bytes + maps:get(<<"disk_reserve_bytes">>, maps:get(<<"limits">>, Job)), ok.
 
-publish(Root, Executable, Manifest, Job) ->
-    Encoded = <<(jsx:encode(Manifest))/binary, "\n">>,
-    ok = reserve(Root, byte_size(Executable) + byte_size(Encoded), Job),
-    Digest = maps:get(<<"digest">>, Manifest), Revision = maps:get(<<"source_revision">>, Manifest),
-    Ref = "refs/generations/" ++ binary_to_list(Digest),
-    {ok, Prev0} = ae_host_git:run(Root, ["for-each-ref", "--format=%(objectname)", Ref], [], 4096),
-    Prev = string:trim(Prev0), true = Prev =:= <<>> orelse Prev =:= Revision,
-    Old = case Prev of <<>> -> lists:duplicate(40, $0); _ -> binary_to_list(Prev) end,
-    {ok, _} = ae_host_git:run(Root, ["update-ref", Ref, binary_to_list(Revision), Old], [], 4096),
-    Repo = filename:join(Root, "source.git"), sync_filesystem(Repo),
-    Artifacts = filename:join(Root, "artifacts"), Target = filename:join(Artifacts, binary_to_list(Digest)),
-    case file:read_link_info(Target) of
-        {ok, _} ->
-            {ok, Existing} = file:read_file(filename:join(Target, "manifest.json")),
-            Manifest = jsx:decode(Existing, [return_maps]),
-            {ok, Saved} = file:read_file(filename:join(Target, "seed")), Digest = ae_policy:sha256(Saved),
-            sync_filesystem(Target);
-        {error, enoent} ->
-            Nonce = binary_to_list(binary:encode_hex(crypto:strong_rand_bytes(4))),
-            Stage = filename:join(Artifacts, ".publishing-" ++ binary_to_list(binary:part(maps:get(<<"id">>, Job), 0, 12)) ++ "-" ++ string:lowercase(Nonce)),
-            ok = file:make_dir(Stage), ok = file:change_mode(Stage, 8#700),
-            try
-                ok = save(filename:join(Stage, "seed"), Executable),
-                ok = save(filename:join(Stage, "manifest.json"), Encoded),
-                sync_filesystem(Stage),
-                ok = file:rename(Stage, Target), sync_filesystem(Artifacts)
-            after file:del_dir_r(Stage) end;
-        _ -> error(artifact_unavailable)
-    end,
-    ok.
-save(Path, Bytes) ->
-    {ok, File} = file:open(Path, [raw, binary, write, exclusive]),
-    try ok = file:write(File, Bytes), ok = file:change_mode(Path, 8#444), file:sync(File)
-    after file:close(File) end.
-sync_filesystem(Path) ->
-    {ok, _} = ae_host_command:run("/usr/bin/sync", ["-f", Path], [], 10000, 4096), ok.
 output_budget(Config) -> case maps:find(<<"output_bytes">>, Config) of
     {ok, Value} -> Value; error -> maps:get(<<"output_bytes">>, maps:get(<<"sandbox_limits">>, Config)) end.
 diagnostic(Bytes, Limit) ->

@@ -1,7 +1,7 @@
 # Candidate builds
 
 The controller builds LLM-authored patches with Erlang code in
-`ae_host_prepare`, `ae_host_build`, and a fixed `build_seed.escript` compiler
+`ae_host_prepare`, `ae_host_build`, `ae_host_publish`, and a fixed `build_seed.escript` compiler
 recipe. Compilation runs on the host as the controller user. A generated patch,
 compiler hook, or agent test can affect files, processes, and network resources
 accessible to that user. See [Host execution](HOST_EXECUTION.md).
@@ -25,7 +25,9 @@ Publication shares a filesystem lock with backup and manual publication. It
 writes and syncs the executable and manifest in a temporary directory before
 renaming it into the content-addressed artifact store. Existing artifacts are
 verified before reuse. Durable execution reservations prevent an interrupted
-build from being automatically reissued or receiving a refunded budget.
+build from being automatically reissued or receiving a refunded budget. Tests
+kill the Erlang publisher at six publication boundaries and verify baseline
+availability, atomic visibility, idempotent recovery, and conflict rejection.
 
 ## Configuration
 
