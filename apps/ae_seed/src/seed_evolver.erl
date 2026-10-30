@@ -37,22 +37,21 @@ act(Socket, #{<<"action">> := <<"source_read">>, <<"path">> := Path, <<"offset">
               <<"bytes">> := Bytes} = Action, State) when map_size(Action) =:= 4 ->
     request(Socket, <<"source_read">>, #{<<"path">> => Path, <<"offset">> => Offset, <<"bytes">> => Bytes}, State);
 act(Socket, #{<<"action">> := <<"edit">>, <<"path">> := Path,
-              <<"old_text">> := Old, <<"new_text">> := New} = Action,
-        #{files := Files, context := #{<<"limits">> := Limits}} = State) when map_size(Action) =:= 8 ->
-    Result = case maps:find(Path, Files) of
-        {ok, #{data := Source, complete := true}} ->
-            seed_edits:replace(Path, Source, Old, New, maps:get(<<"max_patch_bytes">>, Limits));
-        _ -> {error, <<"edit_requires_complete_source_read">>}
-    end,
-    case Result of
-        {ok, Patch} -> submit(Socket, Action#{<<"patch">> => Patch}, State);
-        {error, Reason} -> llm(Socket, #{<<"edit_error">> => Reason,
-            <<"instruction">> => <<"Read the complete pinned file and supply an exact unique old_text with changed new_text, or use a complete proposal within the patch limit.">>}, State)
-    end;
+              <<"old_text">> := Old, <<"new_text">> := New} = Action, State) when map_size(Action) =:= 8 ->
+    edit(Socket, [#{<<"path">> => Path, <<"old_text">> => Old, <<"new_text">> => New}], Action, State);
+act(Socket, #{<<"action">> := <<"edit">>, <<"edits">> := Edits} = Action, State) when map_size(Action) =:= 6 ->
+    edit(Socket, Edits, Action, State);
 act(Socket, #{<<"action">> := <<"proposal">>} = Action, State)
         when map_size(Action) =:= 6 ->
     submit(Socket, Action, State);
 act(Socket, _, State) -> fail(Socket, <<"invalid_authoring_action">>, State).
+
+edit(Socket, Edits, Action, #{files := Files, context := #{<<"limits">> := Limits}} = State) ->
+    case seed_edits:prepare(Edits, Files, maps:get(<<"max_patch_bytes">>, Limits)) of
+        {ok, Patch} -> submit(Socket, Action#{<<"patch">> => Patch}, State);
+        {error, Reason} -> llm(Socket, #{<<"edit_error">> => Reason,
+            <<"instruction">> => <<"Read every complete pinned file and supply unique exact replacements. One edit action submits the entire proposal immediately: include all changes and every required helper definition in its edits list. A repair replaces all previous changes against the original baseline.">>}, State)
+    end.
 
 submit(Socket, Action, #{context := Context, attempt := Attempt} = State) ->
     Rationale = maps:with([<<"patch">>, <<"hypothesis">>, <<"expected_benefit">>, <<"risks">>, <<"requested_tests">>], Action),
@@ -134,10 +133,12 @@ instructions(Context) ->
       "Return exactly one JSON object per response. Read permitted source and public contract before proposing. "
       "Actions: {\"action\":\"source_list\",\"offset\":0,\"count\":16}; "
       "{\"action\":\"source_read\",\"path\":\"apps/ae_seed/src/seed_agent.erl\",\"offset\":0,\"bytes\":", Page/binary, "}; "
-      "then prefer {\"action\":\"edit\",\"path\":\"apps/ae_seed/src/seed_agent.erl\","
-      "\"old_text\":\"exact unique source text\",\"new_text\":\"replacement source text\",\"hypothesis\":\"...\","
+      "then prefer {\"action\":\"edit\",\"edits\":[{\"path\":\"apps/ae_seed/src/seed_agent.erl\","
+      "\"old_text\":\"exact unique source text\",\"new_text\":\"replacement source text\"}],\"hypothesis\":\"...\","
       "\"expected_benefit\":\"...\",\"risks\":[\"...\"],\"requested_tests\":[\"...\"]}. "
-      "The edit action replaces one exact occurrence in a completely read file. Preserve whitespace exactly; "
+      "One edit action immediately submits the COMPLETE proposal for build. Include all changes and any new helper "
+      "function definitions together in its edits list; requested_tests is only a description, not executable code. "
+      "Up to 32 replacements apply in list order, each to one exact occurrence in a completely read file. Preserve whitespace exactly; "
       "include surrounding text to make old_text unique. Supply raw source strings with normal JSON escaping. "
       "The agent constructs the diff, so do not include diff headers in old_text/new_text. "
       "Alternatively {\"action\":\"proposal\",\"patch\":\"unified diff\",\"hypothesis\":\"...\","

@@ -121,13 +121,17 @@ the strategy keeps bounded recent authoring context instead of requiring the
 whole repository in one prompt. Proposal identities include the durable job and
 attempt number, and all repairs remain against the original pinned baseline.
 The first model request explicitly asks for source discovery before proposing.
-For an existing file, the preferred `edit` action supplies `path, old_text,
-new_text, hypothesis, expected_benefit, risks, requested_tests`. The model must
-supply one unique, nonempty exact match and its replacement. The agent caches
+The preferred `edit` action supplies `edits, hypothesis, expected_benefit, risks,
+requested_tests`. Its `edits` list contains 1–32 `{path, old_text, new_text}`
+replacements applied in list order. A single replacement at the top level is
+also supported. Each replacement must match one unique, nonempty exact source
+span. One action submits a complete proposal immediately: disjoint call-site
+changes and new helper definitions must appear together in that list. The agent caches
 contiguous source reads starting at offset zero within the job's source budget;
-only a complete file can be edited. It constructs a whole-file unified diff from
-those immutable bytes, including final-newline markers, and submits the ordinary
-proposal. Missing/incomplete source, ambiguous text and oversized patches return
+only a complete file can be edited. It constructs whole-file unified diffs from
+the original immutable bytes, including final-newline markers, and submits one
+ordinary proposal within a shared patch budget. An invalid replacement rejects
+the entire batch without changing the cache. Missing/incomplete source, ambiguous text and oversized patches return
 public feedback within the same call/deadline budget. Direct proposals remain
 available for multiple files, new files and edits exceeding the whole-file diff
 budget. The controller's path checks, Git application, build and independent

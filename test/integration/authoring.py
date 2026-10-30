@@ -71,6 +71,10 @@ class Provider(BaseHTTPRequestHandler):
                           "requested_tests": ["contract", "replay"]}
                 if self.scenario in ("deployment-rollback", "edit-paged"):
                     action = self.edit_action()
+                    if self.scenario == "deployment-rollback":
+                        batch = next(schema for schema in actions if "edits" in schema["properties"])
+                        assert batch["properties"]["edits"]["maxItems"] == 32
+                        action = self.batch_action()
             elif step == 4 and self.scenario == "edit-paged":
                 assert last["edit_error"] == "edit_requires_complete_source_read"
                 read = next(schema for schema in actions if schema["properties"]["action"]["const"] == "source_read")
@@ -107,6 +111,18 @@ class Provider(BaseHTTPRequestHandler):
             "new_text": '<<"text">> => <<"authored:", Text/binary>>, <<"event_refs">> => []',
             "hypothesis": "clearer greeting", "expected_benefit": "friendlier response",
             "risks": ["regression"], "requested_tests": ["contract", "replay"]}
+
+    @staticmethod
+    def batch_action():
+        action = Provider.edit_action()
+        path, old = action.pop("path"), action.pop("old_text")
+        del action["new_text"]
+        tail = '    ae_protocol:send(Socket, Fields#{<<"type">> => Type, <<"protocol_version">> => 1}).\n'
+        action["edits"] = [{"path": path, "old_text": old,
+            "new_text": '<<"text">> => authored_reply(Text), <<"event_refs">> => []'},
+            {"path": path, "old_text": tail,
+             "new_text": tail + '\nauthored_reply(Text) -> <<"authored:", Text/binary>>.\n'}]
+        return action
 
 
 def main():

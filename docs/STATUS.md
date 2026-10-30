@@ -95,9 +95,11 @@ Automated checks use a fixture provider rather than an installed live model.
 An opt-in real-model acceptance harness is documented in
 [LIVE_EVOLUTION.md](LIVE_EVOLUTION.md). A local Ollama preflight has succeeded;
 live authoring attempts have reached source retrieval and proposal submission,
-but none has passed all gates. The latest malformed unified diff was rejected
-before building. Exact-text model edits now produce agent-assembled diffs from
-complete pinned source reads; host fixtures verify compilation, independent
+but none has passed all gates. A 7B model's malformed diffs were rejected before
+building; a configured 27B model submitted valid exact-text edits but omitted a
+required helper through its bounded compiler-repair attempts. Edit actions now
+submit atomic replacement batches with explicit completeness instructions.
+Agent-assembled diffs use complete pinned source reads; host fixtures verify compilation, independent
 evaluation, explicit promotion and rollback through this path. Successful
 successive live-model generations remain unproven.
 

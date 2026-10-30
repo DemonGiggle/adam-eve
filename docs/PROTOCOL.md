@@ -110,9 +110,11 @@ Read bytes are `data_base64`; a strategy can decode valid UTF-8 before prompting
 `floor((source_page_bytes - 512) * 3 / 4)` raw bytes. Use that raw window and
 `next_offset/eof` to page files; the authoring response schema advertises the
 job-specific ceiling.
-The seed's model-facing `edit` action accepts an exact unique `old_text` and
-`new_text` for one completely read file, plus the proposal rationale. The seed
-constructs a unified diff and sends the normal `evolution_proposal`; this adds
+The seed's model-facing `edit` action accepts 1–32 exact unique `old_text` and
+`new_text` replacements for completely read files, plus the proposal rationale.
+It applies the list atomically in order; one action submits the complete proposal,
+including any required helper definitions. The seed constructs unified diffs
+within one patch budget and sends the normal `evolution_proposal`; this adds
 no runtime protocol message, capability or controller privilege. Direct model
 patches remain supported. See [EVOLUTION.md](EVOLUTION.md) for edit bounds.
 Unknown/protected paths never grant filesystem access. Protected requests reject

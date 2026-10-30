@@ -1,27 +1,57 @@
 -module(seed_edits).
--export([replace/5]).
+-export([replace/5, prepare/3]).
 
 %% The model supplies an exact replacement; the agent supplies diff syntax from
 %% the immutable bytes it read. The controller still validates and applies it.
-replace(Path, Source, Old, New, MaxBytes)
-        when is_binary(Path), is_binary(Source), is_binary(Old), byte_size(Old) > 0,
-             is_binary(New), Old =/= New ->
+replace(Path, Source, Old, New, MaxBytes) when is_binary(Path) ->
+    case replace_source(Source, Old, New) of
+        {ok, Changed} -> bounded(diff(Path, Source, Changed), MaxBytes);
+        Error -> Error
+    end;
+replace(_, _, _, _, _) -> {error, <<"invalid_edit_path">>}.
+
+prepare(Edits, Files, MaxBytes) when is_list(Edits), length(Edits) > 0, length(Edits) =< 32 ->
+    try
+        Changed = lists:foldl(fun(Edit, Acc) -> apply_edit(Edit, Files, Acc) end, #{}, Edits),
+        Patches = [diff(Path, Source, New) || {Path, New} <- lists:sort(maps:to_list(Changed)),
+            #{data := Source} <- [maps:get(Path, Files)], Source =/= New],
+        case Patches of
+            [] -> {error, <<"edit_requires_changes">>};
+            _ -> bounded(iolist_to_binary(Patches), MaxBytes)
+        end
+    catch throw:Reason -> {error, Reason} end;
+prepare(_, _, _) -> {error, <<"edit_batch_must_contain_1_to_32_replacements">>}.
+
+apply_edit(#{<<"path">> := Path, <<"old_text">> := Old, <<"new_text">> := New} = Edit, Files, Acc)
+        when map_size(Edit) =:= 3, is_binary(Path) ->
+    case maps:find(Path, Files) of
+        {ok, #{data := Original, complete := true}} ->
+            case replace_source(maps:get(Path, Acc, Original), Old, New) of
+                {ok, Changed} -> Acc#{Path => Changed};
+                {error, Reason} -> throw(Reason)
+            end;
+        _ -> throw(<<"edit_requires_complete_source_read">>)
+    end;
+apply_edit(_, _, _) -> throw(<<"invalid_edit_replacement">>).
+
+replace_source(Source, Old, New) when is_binary(Source), is_binary(Old), byte_size(Old) > 0,
+                                    is_binary(New), Old =/= New ->
     case unique_match(Source, Old) of
         {Offset, Length} ->
             <<Before:Offset/binary, _:Length/binary, After/binary>> = Source,
-            Changed = <<Before/binary, New/binary, After/binary>>,
-            {OldCount, OldLines} = lines(Source, $-),
-            {NewCount, NewLines} = lines(Changed, $+),
-            Patch = iolist_to_binary([<<"diff --git a/">>, Path, <<" b/">>, Path,
-                <<"\n--- a/">>, Path, <<"\n+++ b/">>, Path, <<"\n@@ -">>, range(OldCount),
-                <<" +">>, range(NewCount), <<" @@\n">>, OldLines, NewLines]),
-            case byte_size(Patch) =< MaxBytes of
-                true -> {ok, Patch};
-                false -> {error, <<"edit_patch_too_large">>}
-            end;
+            {ok, <<Before/binary, New/binary, After/binary>>};
         _ -> {error, <<"edit_requires_unique_old_text">>}
     end;
-replace(_, _, _, _, _) -> {error, <<"edit_requires_changed_nonempty_old_text">>}.
+replace_source(_, _, _) -> {error, <<"edit_requires_changed_nonempty_old_text">>}.
+
+bounded(Patch, MaxBytes) when byte_size(Patch) =< MaxBytes -> {ok, Patch};
+bounded(_, _) -> {error, <<"edit_patch_too_large">>}.
+diff(Path, Source, Changed) ->
+    {OldCount, OldLines} = lines(Source, $-),
+    {NewCount, NewLines} = lines(Changed, $+),
+    iolist_to_binary([<<"diff --git a/">>, Path, <<" b/">>, Path,
+        <<"\n--- a/">>, Path, <<"\n+++ b/">>, Path, <<"\n@@ -">>, range(OldCount),
+        <<" +">>, range(NewCount), <<" @@\n">>, OldLines, NewLines]).
 
 unique_match(Source, Old) ->
     case binary:match(Source, Old) of
