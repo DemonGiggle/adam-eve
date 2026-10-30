@@ -102,8 +102,14 @@ observation after a candidate acknowledges a reply. Real restricted runtimes
 recover with fresh epochs, retain reservations and code, refuse stale approvals,
 and replay acknowledged replies without another provider call. Unknown authoring
 is not reissued; precommit approval is rejected; unobserved committed code rolls
-back. Additional internal commit/activation boundaries remain to be exercised
-through whole-controller fault injection.
+back. A test-only boundary driver additionally pauses coordinators after the real
+author/build/evaluate/stage path, then drives the same trusted store APIs to stop
+exactly after approval, quiescing, preparation for promotion, routing commit
+before activation, rollback intent, and rollback commit before activation. The
+parent kills the whole BEAM and verifies recovery, preserved reservations and
+acknowledged work, and stale-approval refusal at each boundary. These are
+deterministic transaction-boundary checks, without production fault hooks or
+scheduler-dependent timing claims.
 
 ## Authoring path
 

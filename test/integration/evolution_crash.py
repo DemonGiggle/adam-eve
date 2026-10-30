@@ -35,6 +35,17 @@ class CrashProvider(Provider):
             pass  # The requesting controller was deliberately killed.
 
 
+class BoundaryController(Controller):
+    response_timeout = 200
+
+    def __init__(self, root, port, config, phase):
+        self.errors = tempfile.TemporaryFile(mode="w+")
+        self.process = subprocess.Popen(["escript", str(CHECKOUT / "test/integration/evolution_boundary.escript"), phase],
+            cwd=CHECKOUT, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=self.errors, text=True,
+            env={**os.environ, "AE_DATA_ROOT": str(root), "AE_LLM_MODEL": "fixture",
+                "AE_LLM_URL": f"http://127.0.0.1:{port}/api/chat", **config})
+
+
 def wait(controller, inspect, predicate, seconds=180):
     deadline = time.monotonic() + seconds
     while time.monotonic() < deadline:
@@ -176,11 +187,50 @@ def main():
                 finally:
                     RELEASE.set()
                     controller.close()
+            # Stop at exact store boundaries after real authoring and gates. The
+            # escript pauses coordinators and drives the same trusted APIs; no
+            # production fault hooks or timing-dependent trace interception.
+            CrashProvider.block = False
+            for phase in ("approved", "quiescing", "promoting", "committed", "rollback_intent", "rollback_committed"):
+                print("Durable controller crash boundary: " + phase, flush=True)
+                root = parent / phase
+                shutil.copytree(seed, root)
+                root.chmod(0o700)
+                CrashProvider.requests = []
+                CrashProvider.conversation_requests = 0
+                controller = BoundaryController(root, server.server_port, config, phase)
+                try:
+                    injected = controller.receive()
+                    job, before = injected["job"], injected["before"]
+                    identity, epoch = job["id"], injected["boundary_route"]["epoch"]
+                    expected_phase = {"committed": "observing", "rollback_intent": "rollback",
+                        "rollback_committed": "rolled_back"}.get(phase, phase)
+                    assert job["status"] == expected_phase, job
+                    assert len(CrashProvider.requests) == 3
+                    kill(controller)
+                    controller = Controller(root, server.server_port, config)
+                    ready(controller)
+                    expected = "rolled_back" if phase in ("committed", "rollback_intent", "rollback_committed") else "rejected"
+                    recovered = job_at(controller, identity, expected)
+                    assert recovered["reserved_tokens"] == job["reserved_tokens"]
+                    assert recovered["reserved_cpu_ms"] == job["reserved_cpu_ms"]
+                    assert len(CrashProvider.requests) == 3, "boundary recovery reissued authoring"
+                    route = controller.command("status")["routing"]
+                    assert route["artifact"] == before["artifact"] and route["epoch"] > epoch
+                    count = CrashProvider.conversation_requests
+                    ack = injected["acknowledged"]
+                    assert turn(controller, ack["request_id"], "hello") == ack
+                    assert CrashProvider.conversation_requests == count
+                    assert turn(controller, "post-boundary-recovery", "hello")["text"] == "conversation still works"
+                    assert controller.command("approve", deployment_id=job["deployment_id"],
+                        approval_binding=job["approval_binding"]).get("error")
+                finally:
+                    controller.close()
     finally:
         RELEASE.set()
         server.shutdown()
         server.server_close()
-    print("Controller crash recovery passed: unknown authoring is not reissued; pending approval is rejected; observed promotion rolls back without losing acknowledged work or retained code.")
+    print("Controller crash recovery passed: unknown authoring is not reissued; approvals and precommit handoffs are rejected; routing commits and rollback intents recover without losing acknowledged work, reservations or retained code.")
 
 
 if __name__ == "__main__":

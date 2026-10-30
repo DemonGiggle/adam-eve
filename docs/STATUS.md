@@ -51,8 +51,11 @@ across epoch changes. A separate host test now kills the whole controller during
 a reserved model call, generated pending approval, and observation after an
 acknowledged candidate reply. Restart retains reservations and code, refuses old
 approvals, never reissues unknown authoring, and rolls back an unobserved candidate
-without losing its reply. Internal commit/activation fault boundaries and
-successive live-authored generations remain pending.
+without losing its reply. A test-only store driver also verifies whole-controller
+death after approval, quiescing, promotion preparation, routing commit before
+activation, rollback intent, and rollback commit before activation, following the
+real generated build/evaluation/staging gates. Successive live-authored generations
+remain pending.
 
 Generated releases can now receive a durable independent scorecard through a
 supervised evaluator. Digest-only manual staging still rejects them with
