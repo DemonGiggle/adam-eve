@@ -1,6 +1,6 @@
 -module(ae_credentials).
 -include_lib("kernel/include/file.hrl").
--export([resolve/2, read/1, check_parent/1]).
+-export([resolve/2, read/1]).
 
 %% Credential references are controller configuration. Their contents never
 %% enter session settings, audit records, runtime environments or IPC messages.
@@ -36,12 +36,6 @@ read(Path) ->
             {ok, string:trim(Data)}
         after file:close(File) end
     catch _:_ -> {error, credential_file_invalid} end.
-
-check_parent(Path) ->
-    Parent = filename:dirname(Path), ok = no_links(Parent),
-    {ok, Info} = file:read_link_info(Parent), {ok, Own} = file:read_file_info(<<"/proc/self">>),
-    true = Info#file_info.type =:= directory andalso Info#file_info.uid =:= Own#file_info.uid,
-    true = Info#file_info.mode band 8#022 =:= 0, ok.
 
 no_links(Path) ->
     {ok, Info} = file:read_link_info(Path),

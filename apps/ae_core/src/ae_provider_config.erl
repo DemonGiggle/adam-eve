@@ -50,10 +50,6 @@ normalize(Name, Raw) ->
     Models = maps:get(<<"models">>, Raw, #{}), true = is_map(Models) andalso map_size(Models) =< 1024,
     #{name => Name, adapter => Adapter, model => Model, url => Url, thinking => Thinking,
         api_key_env => Env, api_key_path => Path, wire => Wire, models => Models,
-        oauth_path => maps:get(<<"oauth_path">>, Raw, <<>>),
-        client_id => maps:get(<<"client_id">>, Raw, <<"app_EMoamEEZ73f0CkXaXp7hrann">>),
-        oauth_authorize_url => maps:get(<<"oauth_authorize_url">>, Raw, <<"https://auth.openai.com/oauth/authorize">>),
-        oauth_token_url => maps:get(<<"oauth_token_url">>, Raw, <<"https://auth.openai.com/oauth/token">>),
         model_routes => maps:get(<<"model_routes">>, Raw, #{}),
         session_id => uuid()}.
 
@@ -61,7 +57,6 @@ public(Profile) -> maps:with([name, adapter, model, thinking, wire], Profile).
 adapter(<<"ollama">>) -> ollama;
 adapter(<<"openai">>) -> openai;
 adapter(<<"opencode-go">>) -> opencode_go;
-adapter(<<"chatgpt">>) -> chatgpt;
 adapter(<<"anthropic">>) -> anthropic.
 wire(<<"chat_completions">>) -> chat_completions;
 wire(<<"responses">>) -> responses;
@@ -72,7 +67,6 @@ default_wire(_) -> <<"responses">>.
 base(ollama) -> <<"http://127.0.0.1:11434">>;
 base(openai) -> <<"https://api.openai.com/v1">>;
 base(opencode_go) -> <<"https://opencode.ai/inference/go/openai/v1">>;
-base(chatgpt) -> <<"https://chatgpt.com/backend-api/codex">>;
 base(anthropic) -> <<"https://api.anthropic.com/v1">>.
 key_env(openai) -> <<"OPENAI_API_KEY">>;
 key_env(opencode_go) -> <<"OPENCODE_GO_API_KEY">>;

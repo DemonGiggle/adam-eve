@@ -1,8 +1,4 @@
 #!/usr/bin/env bash
 set -euo pipefail
 cd "$(dirname "$0")/.."
-if [[ "${1:-}" == "login" ]]; then
-    shift
-    exec erl +S 2:2 +A 2 -noshell -pa _build/default/lib/*/ebin -s ae_login main -extra "$@"
-fi
 exec erl +S 2:2 +A 2 -noshell -pa _build/default/lib/*/ebin -s ae_cli main

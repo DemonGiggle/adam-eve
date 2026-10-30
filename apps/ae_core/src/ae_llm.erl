@@ -21,7 +21,7 @@ authoring_supported(Config) ->
     try
         Name = maps:get(evolution_provider, Config, maps:get(name, profile(Config))),
         {ok, Selected} = select(#{<<"provider">> => Name}, Config),
-        maps:get(adapter, profile(Selected)) =/= chatgpt
+        lists:member(maps:get(adapter, profile(Selected)), [ollama, openai, opencode_go, anthropic])
     catch _:_ -> false end.
 
 select(Selection, Config) ->

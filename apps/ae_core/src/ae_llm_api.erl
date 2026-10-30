@@ -1,8 +1,6 @@
 -module(ae_llm_api).
 -export([complete/3, models/2, headers/1, thinking/2, normalize/5]).
 
-complete(Messages, #{selected_provider := #{adapter := chatgpt}} = Config, Mode) ->
-    ae_chatgpt:complete(Messages, Config, Mode);
 complete(Messages, Config, Mode) ->
     try
         Profile = ae_llm:profile(Config),
@@ -63,7 +61,6 @@ thinking(responses, #{thinking := Level}) -> #{<<"reasoning">> => #{<<"effort">>
 thinking(chat_completions, #{thinking := Level}) -> #{<<"reasoning_effort">> => Level};
 thinking(messages, _) -> error(thinking_not_supported).
 
-headers(#{adapter := chatgpt} = Profile) -> ae_chatgpt:headers(Profile);
 headers(Profile) ->
     case ae_credentials:resolve(maps:get(api_key_env, Profile), maps:get(api_key_path, Profile)) of
         {ok, Key} ->
@@ -109,7 +106,6 @@ decode(messages, R) ->
     {Text, maps:get(<<"input_tokens">>, U, undefined), maps:get(<<"output_tokens">>, U, undefined),
         maps:get(<<"stop_reason">>, R, undefined) =:= <<"end_turn">>}.
 
-models(#{adapter := chatgpt} = P, Timeout) -> ae_chatgpt:models(P, Timeout);
 models(#{adapter := Adapter, url := Url} = P, Timeout) ->
     {Endpoint, Field, Name} = case Adapter of
         ollama -> {string:slice(Url, 0, length(Url) - length("/api/chat")) ++ "/api/tags", <<"models">>, <<"name">>};

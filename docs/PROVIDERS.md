@@ -17,7 +17,6 @@ profile map directly; `AE_LLM_PROVIDER` overrides the default profile name.
 | `openai` | Responses; optional Chat Completions | `OPENAI_API_KEY` |
 | `opencode-go` | Responses with client/session headers | `OPENCODE_GO_API_KEY` |
 | `anthropic` | Messages | `ANTHROPIC_API_KEY` |
-| `chatgpt` | Subscription Responses stream and account-scoped model catalog | Console PKCE login file |
 
 `wire` can select `responses`, `chat_completions` or `messages` for API profiles.
 `model_routes` can override it for individual models. OpenCode's current Console
@@ -76,33 +75,9 @@ Responses/Chat Completions request JSON mode; the agent and controller still
 validate actions, patch scope and all build/evaluation gates. See the official
 [structured-output guide](https://developers.openai.com/api/docs/guides/structured-outputs).
 
-The subscription compatibility endpoint does not provide the output-cap contract
-required by evolution accounting. It is available for ordinary conversation;
-select a budget-capable authoring profile to enable evolution. Ordinary
-subscription requests retain the controller deadline and response-size ceiling.
 The client never automatically repeats an ambiguous failed inference.
-
-## ChatGPT subscription login
-
-Configure a `chatgpt` profile, then run:
-
-```sh
-AE_CONFIG_FILE=/absolute/config.json scripts/ae login chatgpt
-```
-
-Open the printed authorization URL, approve in the browser, and paste the full
-localhost callback URL into the console. The compatibility flow follows
-q-agent's PKCE/state design and Codex subscription endpoint. It has a ten-minute
-login deadline, verifies the exact callback and state, and writes a private token
-file atomically. The callback is never accepted from Telegram. Tokens refresh
-under a per-file lock before expiry and once after a confirmed 401; simultaneous
-callers reuse a rotated credential instead of refreshing the stale token twice.
-Model catalog requests use the selected account's credentials.
-
-This is separate from OpenAI API-key authentication and from registering a new
-Sign in with ChatGPT client. The official integration contract is documented in
-[Sign in with ChatGPT](https://developers.openai.com/siwc/token-sharing-open-source/codex-app-server).
 
 `test/integration/providers.py` uses a local HTTP fixture and synthetic keys to
 verify API wires, model listing, credential headers, required usage, output
-completion checks, and PKCE callback/state persistence. It sends no paid requests.
+completion checks. It sends no paid requests. Subscription/OAuth adapters are
+outside the requested scope; the configured providers use Ollama or API keys.

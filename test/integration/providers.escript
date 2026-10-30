@@ -9,18 +9,8 @@ main([Mode]) ->
     Result = case Mode of
         "complete" -> ae_llm:complete(Messages, Config);
         "budget" -> ae_llm:complete_budgeted(Messages, Config, 8192);
-        "models" -> ae_llm:models(maps:get(default_provider, Config), Config);
-        "oauth" -> oauth(Config)
+        "models" -> ae_llm:models(maps:get(default_provider, Config), Config)
     end,
     io:put_chars([jsx:encode(render(Result)), "\n"]).
 render({ok, Value}) -> #{<<"ok">> => Value};
 render({error, Reason}) -> #{<<"error">> => atom_to_binary(Reason, utf8)}.
-oauth(Config) ->
-    P = ae_llm:profile(Config),
-    {Url, Session} = ae_chatgpt:begin_login(P), true = byte_size(Url) > 100,
-    {error, invalid_oauth_callback} = ae_chatgpt:finish_login(P, Session,
-        <<"http://localhost:1455/auth/callback?code=test&state=wrong">>),
-    Callback = <<"http://localhost:1455/auth/callback?code=approved-by-test&state=", (maps:get(state, Session))/binary>>,
-    ok = ae_chatgpt:finish_login(P, Session, Callback),
-    {ok, _} = ae_chatgpt:headers(P),
-    {ok, #{<<"saved">> => true, <<"state_verified">> => true}}.

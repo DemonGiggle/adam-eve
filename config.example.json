@@ -18,11 +18,6 @@
       "adapter": "opencode-go",
       "model": "your-go-model",
       "api_key_env": "OPENCODE_GO_API_KEY"
-    },
-    "chatgpt": {
-      "adapter": "chatgpt",
-      "model": "your-subscription-model",
-      "oauth_path": "/absolute/private/config/adam-eve/chatgpt-oauth.json"
     }
   },
   "telegram": {

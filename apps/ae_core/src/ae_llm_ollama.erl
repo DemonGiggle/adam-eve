@@ -75,7 +75,7 @@ request(Messages, #{url := Url, model := Model, llm_timeout := Timeout} = Config
                     {ok, Decoded};
                 _ -> {error, invalid_provider_response}
             catch _:_ -> {error, invalid_provider_response} end;
-        {ok, _} -> {error, provider_response_rejected};
+        {ok, _, _} -> {error, provider_response_rejected};
         {error, _} -> {error, provider_unavailable}
       end;
       Error -> Error
