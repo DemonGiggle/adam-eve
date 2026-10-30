@@ -13,6 +13,10 @@ from ae_build import build_manual
 
 
 def run(*args, cwd=None):
+    # A fetch must not leave background maintenance mutating the repository
+    # while publication syncs its objects and refs under publication.lock.
+    if args[0] == "git":
+        args = ("git", "-c", "maintenance.auto=false", "-c", "gc.auto=0", *args[1:])
     return subprocess.check_output(args, cwd=cwd, stderr=subprocess.STDOUT).decode().strip()
 
 
